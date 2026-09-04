@@ -1,0 +1,7 @@
+-r requirements.txt
+# Deterministic static-analysis tools used by the real backend
+# (src/inspector_app/backend/). No AI/cloud service is used anywhere.
+bandit>=1.9
+ruff>=0.16
+pip-audit>=2.10
+detect-secrets>=1.5

@@ -1,0 +1,13 @@
+[project]
+name = "python-inspector"
+version = "0.1.0"
+description = "V1 Python Inspector — Windows desktop app for finding bugs and vulnerabilities in Python projects."
+requires-python = ">=3.10"
+dependencies = [
+    "customtkinter>=5.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--ignore=tests/fixtures"
