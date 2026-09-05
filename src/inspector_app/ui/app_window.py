@@ -4,9 +4,12 @@ the backend or the state machine directly -- only through this controller.
 """
 from __future__ import annotations
 
+import os
 import queue
 import threading
+import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -183,13 +186,57 @@ class AppController:
     def approve_and_run(self) -> None:
         request = self.state.pending_approval
         assert request is not None
-        result = self.backend.run_approved_check(request)
+        self.screens[Screen.RUN_APPROVAL].set_busy(True)
+
+        result_queue: "queue.Queue" = queue.Queue()
+
+        def worker() -> None:
+            result_queue.put(self.backend.run_approved_check(request))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._poll_run_result_queue(result_queue)
+
+    def _poll_run_result_queue(self, result_queue: "queue.Queue") -> None:
+        try:
+            result = result_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(50, self._poll_run_result_queue, result_queue)
+            return
+        self.screens[Screen.RUN_APPROVAL].set_busy(False)
         self.state.record_run_result(result)
         self.render()
-        messagebox.showinfo(
-            theme.APP_TITLE,
-            f"Finished.\nExit code: {result.exit_code}\n\n{result.stdout or result.stderr}",
-        )
+        self._show_run_result_window(result)
+
+    def _show_run_result_window(self, result) -> None:
+        # A plain tkinter messagebox proved unreliable in manual testing on
+        # this machine (no error, but no dialog ever appeared) -- a CTkToplevel
+        # uses the same widget stack as the rest of the app and is also
+        # non-modal, so Hunter can keep working while it's open.
+        window = ctk.CTkToplevel(self.root)
+        window.title(f"{theme.APP_TITLE} — run result")
+        window.geometry("640x420")
+        window.minsize(480, 320)
+
+        if result.exit_code == 0:
+            status = "Passed"
+        elif result.exit_code is not None:
+            status = "Did not pass"
+        else:
+            status = "Did not run"
+        ctk.CTkLabel(
+            window,
+            text=f"{status} — exit code: {result.exit_code if result.exit_code is not None else 'n/a'}",
+            font=theme.FONT_SUBTITLE, anchor="w",
+        ).pack(fill="x", padx=16, pady=(16, 8))
+
+        text = ctk.CTkTextbox(window, font=theme.FONT_MONO, wrap="word")
+        text.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        text.insert("1.0", result.stdout or result.stderr or "(no output captured)")
+        text.configure(state="disabled")
+
+        ctk.CTkButton(window, text="Close", command=window.destroy, width=120).pack(pady=(0, 16))
+        window.lift()
+        window.focus_force()
 
     # -- Save report -------------------------------------------------------------
     def open_save_report(self) -> None:
@@ -223,6 +270,26 @@ class AppController:
         messagebox.showinfo(theme.APP_TITLE, f"Report saved to:\n{path}")
 
 
+def _install_exception_logger(root: ctk.CTk) -> None:
+    """Tkinter callback exceptions are printed to stderr by default, which is
+    lost when the app is launched without an attached console. Log them to
+    a file instead so a silent failure always leaves evidence.
+    """
+    log_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PythonInspector"
+    log_path = log_dir / "errors.log"
+
+    def _log_callback_exception(exc_type, exc_value, exc_tb) -> None:
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(f"\n--- {datetime.now(timezone.utc).isoformat()} ---\n")
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=fh)
+        except OSError:
+            pass  # logging must never itself crash the callback handler
+
+    root.report_callback_exception = _log_callback_exception
+
+
 def launch() -> None:
     from ..backend import RealBackend
 
@@ -231,5 +298,6 @@ def launch() -> None:
     root.title(theme.APP_TITLE)
     root.geometry(theme.WINDOW_SIZE)
     root.minsize(860, 560)
+    _install_exception_logger(root)
     AppController(root, backend=RealBackend())
     root.mainloop()

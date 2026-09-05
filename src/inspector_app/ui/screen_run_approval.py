@@ -30,17 +30,22 @@ class RunApprovalScreen(ctk.CTkFrame):
         self.boundary_label = self._field(card, "Safety boundary")
         self.risk_label = self._field(card, "Possible risk")
 
+        self.status_label = ctk.CTkLabel(self, text="", font=theme.FONT_BODY, text_color="#7f8c8d")
+        self.status_label.pack(pady=(0, 4))
+
         button_row = ctk.CTkFrame(self, fg_color="transparent")
         button_row.pack(pady=30)
         # Neither button is given keyboard focus on entry, so neither action is preselected.
-        ctk.CTkButton(
+        self.cancel_button = ctk.CTkButton(
             button_row, text="Cancel", fg_color="transparent", border_width=2, width=160,
             command=self.controller.cancel_run_approval,
-        ).grid(row=0, column=0, padx=12)
-        ctk.CTkButton(
+        )
+        self.cancel_button.grid(row=0, column=0, padx=12)
+        self.approve_button = ctk.CTkButton(
             button_row, text="Approve and run", fg_color="#27ae60", width=200, height=42,
             command=self.controller.approve_and_run,
-        ).grid(row=0, column=1, padx=12)
+        )
+        self.approve_button.grid(row=0, column=1, padx=12)
 
     def _field(self, parent, title):
         ctk.CTkLabel(parent, text=title, font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=20)
@@ -56,3 +61,11 @@ class RunApprovalScreen(ctk.CTkFrame):
         self.purpose_label.configure(text=request.purpose)
         self.boundary_label.configure(text=request.safety_boundary)
         self.risk_label.configure(text=request.possible_risk)
+        self.set_busy(False)
+
+    def set_busy(self, busy: bool) -> None:
+        self.approve_button.configure(state="disabled" if busy else "normal")
+        self.cancel_button.configure(state="disabled" if busy else "normal")
+        self.status_label.configure(
+            text="Running the approved check... this can take up to two minutes." if busy else ""
+        )

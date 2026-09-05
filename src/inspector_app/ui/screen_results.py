@@ -7,6 +7,14 @@ from . import theme
 
 CONFIRMED_STATUSES = {FindingStatus.CONFIRMED_FAILURE, FindingStatus.STRONG_FINDING}
 
+# Building one card is several widget constructions; doing all ~hundreds of
+# them in one synchronous call is what made the app report "Not Responding"
+# for large scans. Building a small batch per `after()` tick instead keeps
+# yielding control back to the Tk event loop so Windows never sees the app
+# go unresponsive, at the cost of the list filling in over a second or two
+# instead of appearing all at once.
+_ROWS_PER_BATCH = 5
+
 
 class ResultsScreen(ctk.CTkFrame):
     """Screen 4: plain-English summary + severity, distinguishing confirmed vs possible."""
@@ -14,6 +22,7 @@ class ResultsScreen(ctk.CTkFrame):
     def __init__(self, master, controller):
         super().__init__(master, fg_color="transparent")
         self.controller = controller
+        self._build_token = 0
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=30, pady=(24, 10))
@@ -36,6 +45,11 @@ class ResultsScreen(ctk.CTkFrame):
         self.disclaimer.pack(padx=30, pady=(0, 14), anchor="w")
 
     def refresh(self) -> None:
+        # Invalidate any still-running incremental build from a previous
+        # refresh (e.g. the user navigated away and back before it finished).
+        self._build_token += 1
+        token = self._build_token
+
         for child in self.scroll.winfo_children():
             child.destroy()
 
@@ -61,8 +75,16 @@ class ResultsScreen(ctk.CTkFrame):
             text=f"{result.source_label}  —  {confirmed} confirmed, {possible} possible"
         )
 
-        for finding in result.findings:
+        self._build_rows_incrementally(result.findings, 0, token)
+
+    def _build_rows_incrementally(self, findings, start_index: int, token: int) -> None:
+        if token != self._build_token:
+            return  # superseded by a newer refresh() -- stop building
+        end_index = min(start_index + _ROWS_PER_BATCH, len(findings))
+        for finding in findings[start_index:end_index]:
             self._build_row(finding)
+        if end_index < len(findings):
+            self.after(1, self._build_rows_incrementally, findings, end_index, token)
 
     def _build_row(self, finding) -> None:
         card = ctk.CTkFrame(self.scroll, corner_radius=10)
