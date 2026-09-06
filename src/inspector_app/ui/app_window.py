@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import queue
 import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ import customtkinter as ctk
 
 from ..contract import InspectorBackend
 from ..mock_data import MockBackend
-from ..models import ScanResult, SourceKind
+from ..models import ApprovalDecision, RunResult, ScanResult, SourceKind
 from ..state import AppState, ScanPhase, Screen
 from . import theme
 from .screen_project_review import ProjectReviewScreen
@@ -33,9 +34,14 @@ class AppController:
         self.root = root
         self.state = AppState()
         self.backend: InspectorBackend = backend or MockBackend()
-        self._progress_queue: "queue.Queue[tuple]" = queue.Queue()
+        self._progress_queue: queue.Queue[tuple] = queue.Queue()
         self._cancel_flag = threading.Event()
         self._scan_thread: threading.Thread | None = None
+        self._run_thread: threading.Thread | None = None
+        self._run_busy = False
+        self._run_window = None
+        self._last_run_command = ""
+        self._closing = False
 
         self.container = ctk.CTkFrame(root, fg_color="transparent")
         self.container.pack(fill="both", expand=True)
@@ -51,20 +57,39 @@ class AppController:
             Screen.RUN_APPROVAL: RunApprovalScreen(self.container, self),
             Screen.SAVE_REPORT: SaveReportScreen(self.container, self),
         }
-        for frame in self.screens.values():
-            frame.grid(row=0, column=0, sticky="nsew")
-
+        self._visible_frame = None
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.render()
 
     # -- rendering ---------------------------------------------------------
     def render(self) -> None:
         frame = self.screens[self.state.screen]
+        if self._visible_frame is not frame:
+            if self._visible_frame is not None:
+                self._visible_frame.grid_remove()
+            frame.grid(row=0, column=0, sticky="nsew")
+            self._visible_frame = frame
         frame.refresh()
         frame.tkraise()
 
+    def _end_session(self) -> None:
+        cleanup = getattr(self.backend, "end_session", None)
+        if cleanup is not None:
+            cleanup()
+
+    def close(self) -> None:
+        self._closing = True
+        self._cancel_flag.set()
+        # Let the worker finish its container/clone cleanup before ending Python.
+        if any(t is not None and t.is_alive() for t in (self._scan_thread, self._run_thread)):
+            self.root.after(100, self.close)
+            return
+        self._end_session()
+        self.root.destroy()
+
     # -- Start screen --------------------------------------------------------
     def pick_local_folder(self) -> None:
-        path = filedialog.askdirectory(title="Choose a Python project folder")
+        path = filedialog.askdirectory(parent=self.root, title="Choose a Python project folder", mustexist=True)
         if not path:
             return
         self.state.choose_local_folder(path)
@@ -75,7 +100,7 @@ class AppController:
         if not url:
             messagebox.showwarning(theme.APP_TITLE, "Enter a GitHub URL first.")
             return
-        if not (url.startswith("https://github.com/") or url.startswith("http://github.com/")):
+        if not url.startswith(("https://github.com/", "http://github.com/")):
             messagebox.showwarning(
                 theme.APP_TITLE,
                 "That does not look like a GitHub URL. Expected something like "
@@ -87,19 +112,35 @@ class AppController:
 
     # -- Project review -----------------------------------------------------
     def back_to_start(self) -> None:
+        if self._run_busy:
+            return
+        if self._scan_thread is not None and self._scan_thread.is_alive():
+            self._cancel_flag.set()
+        else:
+            self._end_session()
+        if self._run_window is not None and self._run_window.winfo_exists():
+            self._run_window.destroy()
         self.state.back_to_start()
+        self.screens[Screen.RESULTS].refresh()
         self.render()
 
     def begin_scan(self) -> None:
+        if self._closing or self.state.screen != Screen.PROJECT_REVIEW:
+            return
+        if self._scan_thread is not None and self._scan_thread.is_alive():
+            self.root.after(50, self.begin_scan)
+            return
         self.state.begin_scan()
         self._cancel_flag.clear()
+        self._progress_queue = queue.Queue()
+        scan_queue = self._progress_queue
         self.render()
 
         source_kind = self.state.source_kind
         source_label = self.state.source_label
 
         def on_progress(label: str, fraction: float) -> None:
-            self._progress_queue.put(("progress", label, fraction))
+            scan_queue.put(("progress", label, fraction))
 
         def is_cancelled() -> bool:
             return self._cancel_flag.is_set()
@@ -114,18 +155,26 @@ class AppController:
                     result = self.backend.scan_github_project(
                         source_label, on_progress=on_progress, is_cancelled=is_cancelled
                     )
-                self._progress_queue.put(("done", result))
-            except Exception as exc:  # a backend crash must not take the UI down with it
-                self._progress_queue.put(("error", str(exc)))
+                if is_cancelled():
+                    self._end_session()
+                scan_queue.put(("done", result))
+            except Exception as exc:  # noqa: BLE001 -- deliver worker failure to the UI
+                try:
+                    self._end_session()
+                finally:
+                    scan_queue.put(("error", str(exc)))
 
         self._scan_thread = threading.Thread(target=worker, daemon=True)
         self._scan_thread.start()
-        self.root.after(50, self._poll_scan_queue)
+        self.root.after(50, self._poll_scan_queue, scan_queue)
 
-    def _poll_scan_queue(self) -> None:
+    def _poll_scan_queue(self, scan_queue=None) -> None:
+        scan_queue = scan_queue if scan_queue is not None else self._progress_queue
+        if scan_queue is not self._progress_queue or self._closing:
+            return
         try:
             while True:
-                item = self._progress_queue.get_nowait()
+                item = scan_queue.get_nowait()
                 kind = item[0]
                 if kind == "progress":
                     _, label, fraction = item
@@ -152,7 +201,7 @@ class AppController:
         except queue.Empty:
             pass
         if self.state.scan_phase == ScanPhase.RUNNING:
-            self.root.after(50, self._poll_scan_queue)
+            self.root.after(50, self._poll_scan_queue, scan_queue)
 
     def cancel_scan(self) -> None:
         self._cancel_flag.set()
@@ -180,49 +229,74 @@ class AppController:
         self.render()
 
     def cancel_run_approval(self) -> None:
+        if self._run_busy:
+            return
         self.state.cancel_run_approval()
         self.render()
 
     def approve_and_run(self) -> None:
+        if self._run_busy or self._closing:
+            return
         request = self.state.pending_approval
         assert request is not None
+        self._run_busy = True
+        self._last_run_command = request.command_display
         self.screens[Screen.RUN_APPROVAL].set_busy(True)
 
-        result_queue: "queue.Queue" = queue.Queue()
+        result_queue: queue.Queue = queue.Queue()
 
         def worker() -> None:
-            result_queue.put(self.backend.run_approved_check(request))
+            started = time.monotonic()
+            try:
+                result = self.backend.run_approved_check(request)
+            except Exception as exc:  # noqa: BLE001 -- never strand approval on a crashed worker
+                result = RunResult(request.request_id, ApprovalDecision.APPROVED, None, "",
+                                   f"Runtime check failed: {exc}", time.monotonic() - started)
+            result_queue.put(result)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_thread = threading.Thread(target=worker, daemon=True)
+        self._run_thread.start()
         self._poll_run_result_queue(result_queue)
 
-    def _poll_run_result_queue(self, result_queue: "queue.Queue") -> None:
+    def _poll_run_result_queue(self, result_queue: queue.Queue) -> None:
         try:
             result = result_queue.get_nowait()
         except queue.Empty:
             self.root.after(50, self._poll_run_result_queue, result_queue)
+            return
+        self._run_busy = False
+        if self._closing:
             return
         self.screens[Screen.RUN_APPROVAL].set_busy(False)
         self.state.record_run_result(result)
         self.render()
         self._show_run_result_window(result)
 
+    def show_last_run_result(self) -> None:
+        if self.state.last_run_result is not None:
+            self._show_run_result_window(self.state.last_run_result)
+
     def _show_run_result_window(self, result) -> None:
         # A plain tkinter messagebox proved unreliable in manual testing on
         # this machine (no error, but no dialog ever appeared) -- a CTkToplevel
         # uses the same widget stack as the rest of the app and is also
         # non-modal, so Hunter can keep working while it's open.
-        window = ctk.CTkToplevel(self.root)
+        if self._run_window is not None and self._run_window.winfo_exists():
+            self._run_window.destroy()
+        window = self._run_window = ctk.CTkToplevel(self.root)
+        window.transient(self.root)
         window.title(f"{theme.APP_TITLE} — run result")
         window.geometry("640x420")
         window.minsize(480, 320)
 
-        if result.exit_code == 0:
+        if result.timed_out:
+            status = "Timed out"
+        elif result.exit_code == 0:
             status = "Passed"
         elif result.exit_code is not None:
             status = "Did not pass"
         else:
-            status = "Did not run"
+            status = "No completed result"
         ctk.CTkLabel(
             window,
             text=f"{status} — exit code: {result.exit_code if result.exit_code is not None else 'n/a'}",
@@ -231,12 +305,19 @@ class AppController:
 
         text = ctk.CTkTextbox(window, font=theme.FONT_MONO, wrap="word")
         text.pack(fill="both", expand=True, padx=16, pady=(0, 8))
-        text.insert("1.0", result.stdout or result.stderr or "(no output captured)")
+        text.insert("1.0", self.format_run_output(result))
         text.configure(state="disabled")
 
         ctk.CTkButton(window, text="Close", command=window.destroy, width=120).pack(pady=(0, 16))
         window.lift()
         window.focus_force()
+
+    def format_run_output(self, result) -> str:
+        return (f"Command: {self._last_run_command}\nRequest: {result.request_id}\n"
+                f"Duration: {result.duration_seconds:.2f} seconds\nTimed out: {result.timed_out}\n\n"
+                "This runs the project's existing tests; a pass does not prove a finding is fixed.\n\n"
+                f"STDOUT\n{result.stdout or '(no stdout captured)'}\n\n"
+                f"STDERR\n{result.stderr or '(no stderr captured)'}")
 
     # -- Save report -------------------------------------------------------------
     def open_save_report(self) -> None:
@@ -252,6 +333,7 @@ class AppController:
     def save_report_to_disk(self) -> None:
         assert self.state.report is not None
         path = filedialog.asksaveasfilename(
+            parent=self.root,
             title="Save report",
             defaultextension=".md",
             filetypes=[("Markdown", "*.md"), ("Text", "*.txt"), ("All files", "*.*")],
@@ -263,11 +345,14 @@ class AppController:
             + "\n\n---\n\n"
             + self.state.report.technical_packet_markdown
         )
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+        except OSError as exc:
+            self.screens[Screen.SAVE_REPORT].status_label.configure(text=f"Could not save report: {exc}")
+            return
         self.state.report_saved(path)
         self.render()
-        messagebox.showinfo(theme.APP_TITLE, f"Report saved to:\n{path}")
 
 
 def _install_exception_logger(root: ctk.CTk) -> None:

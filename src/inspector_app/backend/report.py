@@ -6,9 +6,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..models import CheckOutcome, FindingStatus, ReportDocument, ScanResult
-
-_CONFIRMED_STATUSES = {FindingStatus.CONFIRMED_FAILURE, FindingStatus.STRONG_FINDING}
+from ..models import (
+    REPAIR_REVIEW_GUIDANCE,
+    CheckOutcome,
+    FindingStatus,
+    ReportDocument,
+    ScanResult,
+)
 
 
 def render_report(scan_result: ScanResult) -> ReportDocument:
@@ -38,9 +42,13 @@ def _render_hunter_summary(scan_result: ScanResult) -> str:
     if scan_result.is_empty:
         lines.append("No findings were produced by this scan.")
     else:
-        confirmed = sum(1 for f in scan_result.findings if f.status in _CONFIRMED_STATUSES)
-        possible = len(scan_result.findings) - confirmed
-        lines.append(f"**{confirmed} confirmed, {possible} possible** finding(s).")
+        counts = {status: sum(f.status == status for f in scan_result.findings) for status in FindingStatus}
+        lines.append(
+            f"**{counts[FindingStatus.CONFIRMED_FAILURE]} confirmed failures, "
+            f"{counts[FindingStatus.STRONG_FINDING]} strong findings, "
+            f"{counts[FindingStatus.POSSIBLE_FINDING]} possible findings, "
+            f"{counts[FindingStatus.INFORMATIONAL]} informational findings.**"
+        )
         lines.append("")
         for f in sorted(scan_result.findings, key=_severity_sort_key):
             lines.append(f"- **[{f.severity.value} / {f.status.value}] {f.category}** — {f.summary}")
@@ -60,6 +68,8 @@ def _render_hunter_summary(scan_result: ScanResult) -> str:
 
 def _render_technical_packet(scan_result: ScanResult) -> str:
     lines = [f"# Technical repair packet — {scan_result.source_label}", ""]
+    lines += ["## Repair review instructions", *REPAIR_REVIEW_GUIDANCE,
+              ScanResult.GUARANTEE_DISCLAIMER, ""]
 
     lines.append("## Checks attempted")
     for r in scan_result.scanners_run:

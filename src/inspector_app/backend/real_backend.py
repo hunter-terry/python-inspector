@@ -51,6 +51,11 @@ class RealBackend:
     def _cleanup_workspace_root(self) -> None:
         safe_rmtree(self._workspace_root)
 
+    def end_session(self) -> None:
+        """Release reviewed source when leaving Results or closing the app."""
+        self._retire_previous_workspace()
+        self._cleanup_workspace_root()
+
     def _retire_previous_workspace(self) -> None:
         """Remove the disposable clone from the *previous* scan, if any.
 
@@ -301,6 +306,7 @@ class RealBackend:
                 timed_out=False,
             )
 
+        self._workspace_root.mkdir(parents=True, exist_ok=True)
         disposable_copy = self._workspace_root / f"run-{uuid.uuid4().hex[:12]}"
         try:
             shutil.copytree(

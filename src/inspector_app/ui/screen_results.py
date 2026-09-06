@@ -2,18 +2,11 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from ..models import FindingStatus
+from ..models import CheckOutcome, FindingStatus
 from . import theme
 
-CONFIRMED_STATUSES = {FindingStatus.CONFIRMED_FAILURE, FindingStatus.STRONG_FINDING}
-
-# Building one card is several widget constructions; doing all ~hundreds of
-# them in one synchronous call is what made the app report "Not Responding"
-# for large scans. Building a small batch per `after()` tick instead keeps
-# yielding control back to the Tk event loop so Windows never sees the app
-# go unresponsive, at the cost of the list filling in over a second or two
-# instead of appearing all at once.
-_ROWS_PER_BATCH = 5
+# Bound both native window resources and layout cost, regardless of scan size.
+PAGE_SIZE = 10
 
 
 class ResultsScreen(ctk.CTkFrame):
@@ -22,7 +15,8 @@ class ResultsScreen(ctk.CTkFrame):
     def __init__(self, master, controller):
         super().__init__(master, fg_color="transparent")
         self.controller = controller
-        self._build_token = 0
+        self._result = None
+        self._page = 0
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=30, pady=(24, 10))
@@ -38,6 +32,24 @@ class ResultsScreen(ctk.CTkFrame):
         self.summary_label = ctk.CTkLabel(self, text="", font=theme.FONT_SUBTITLE, justify="left")
         self.summary_label.pack(anchor="w", padx=30)
 
+        self.coverage_label = ctk.CTkLabel(self, text="", font=theme.FONT_BODY, anchor="w",
+                                          justify="left", wraplength=760)
+        self.coverage_label.pack(fill="x", padx=30)
+        self.run_button = ctk.CTkButton(
+            self, text="View last run output", command=self.controller.show_last_run_result,
+        )
+
+        pager = ctk.CTkFrame(self, fg_color="transparent")
+        pager.pack(fill="x", padx=30, pady=(8, 0))
+        self.previous_button = ctk.CTkButton(pager, text="Previous", width=100,
+                                           command=lambda: self._change_page(-1))
+        self.previous_button.pack(side="left")
+        self.page_label = ctk.CTkLabel(pager, text="", font=theme.FONT_BODY)
+        self.page_label.pack(side="left", padx=14)
+        self.next_button = ctk.CTkButton(pager, text="Next", width=100,
+                                       command=lambda: self._change_page(1))
+        self.next_button.pack(side="left")
+
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True, padx=20, pady=10)
 
@@ -45,46 +57,64 @@ class ResultsScreen(ctk.CTkFrame):
         self.disclaimer.pack(padx=30, pady=(0, 14), anchor="w")
 
     def refresh(self) -> None:
-        # Invalidate any still-running incremental build from a previous
-        # refresh (e.g. the user navigated away and back before it finished).
-        self._build_token += 1
-        token = self._build_token
-
-        for child in self.scroll.winfo_children():
-            child.destroy()
-
         state = self.controller.state
         result = state.scan_result
+        if state.last_run_result is not None:
+            self.run_button.pack(after=self.coverage_label, anchor="w", padx=30, pady=6)
+        else:
+            self.run_button.pack_forget()
+        if result is self._result:
+            return  # Returning from details/report must not recreate native widgets.
+        self._result = result
+        self._page = 0
+        self._show_page()
         if result is None:
             return
 
         self.disclaimer.configure(text=result.GUARANTEE_DISCLAIMER)
 
+        incomplete = [r for r in result.scanners_run if r.outcome != CheckOutcome.RAN]
+        self.coverage_label.configure(text=(
+            "Incomplete coverage: " + "; ".join(f"{r.scanner_name}: {r.outcome.value}" for r in incomplete)
+            if incomplete else "Checks completed. Review evidence before applying a repair."
+        ))
         if result.is_empty:
             self.summary_label.configure(text=f"No findings for {result.source_label}.")
             ctk.CTkLabel(
                 self.scroll,
-                text="Nothing to review — no likely bugs or vulnerabilities were found.",
+                text="No findings from the checks that ran. Review check coverage in Save report.",
                 font=theme.FONT_BODY,
             ).pack(pady=40)
             return
 
-        confirmed = sum(1 for f in result.findings if f.status in CONFIRMED_STATUSES)
-        possible = len(result.findings) - confirmed
+        counts = {status: sum(f.status == status for f in result.findings) for status in FindingStatus}
         self.summary_label.configure(
-            text=f"{result.source_label}  —  {confirmed} confirmed, {possible} possible"
+            text=(f"{len(result.findings)} findings — "
+                  f"{counts[FindingStatus.CONFIRMED_FAILURE]} confirmed failures, "
+                  f"{counts[FindingStatus.STRONG_FINDING]} strong, "
+                  f"{counts[FindingStatus.POSSIBLE_FINDING]} possible, "
+                  f"{counts[FindingStatus.INFORMATIONAL]} informational")
         )
 
-        self._build_rows_incrementally(result.findings, 0, token)
+    def _change_page(self, direction: int) -> None:
+        if self._result is None:
+            return
+        last = max(0, (len(self._result.findings) - 1) // PAGE_SIZE)
+        self._page = max(0, min(last, self._page + direction))
+        self._show_page()
 
-    def _build_rows_incrementally(self, findings, start_index: int, token: int) -> None:
-        if token != self._build_token:
-            return  # superseded by a newer refresh() -- stop building
-        end_index = min(start_index + _ROWS_PER_BATCH, len(findings))
-        for finding in findings[start_index:end_index]:
+    def _show_page(self) -> None:
+        for child in self.scroll.winfo_children():
+            child.destroy()
+        findings = self._result.findings if self._result else ()
+        start = self._page * PAGE_SIZE
+        end = min(start + PAGE_SIZE, len(findings))
+        self.page_label.configure(text=f"{start + 1 if findings else 0}–{end} of {len(findings)} findings")
+        self.previous_button.configure(state="normal" if self._page else "disabled")
+        self.next_button.configure(state="normal" if end < len(findings) else "disabled")
+        for finding in findings[start:end]:
             self._build_row(finding)
-        if end_index < len(findings):
-            self.after(1, self._build_rows_incrementally, findings, end_index, token)
+        self.scroll._parent_canvas.yview_moveto(0)
 
     def _build_row(self, finding) -> None:
         card = ctk.CTkFrame(self.scroll, corner_radius=10)

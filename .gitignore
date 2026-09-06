@@ -2,4 +2,7 @@
 .pytest_cache/
 __pycache__/
 *.pyc
-evidence/
+evidence/*
+!evidence/measure_results.py
+!evidence/native_dialog_probe.py
+!evidence/verify_ui.py

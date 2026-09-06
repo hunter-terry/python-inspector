@@ -40,6 +40,24 @@ check is refused rather than run unsafely.
 
 ## Running it
 
+For this installed copy, double-click **Start Python Inspector.cmd** in this
+folder. Choose a project, review the source, then scan. Results show ten
+findings per page; returning from details or report preview keeps your place.
+Use **Copy for repair** for one finding or **Save report** for the complete report.
+After an approved test run, **View last run output** reopens both stdout and stderr.
+
+A public GitHub clone remains available only during its review session so an
+approved test can use the reviewed source. **Scan something else** or closing
+the app ends the session and removes that copy. Closing during work waits for
+worker cleanup to finish.
+
+Before accepting an AI repair, have it verify the finding in your source,
+explain the proposed change, and supply a regression test. Review the diff,
+run the relevant tests, and scan again. A test pass or clean scan does not
+establish that a product is secure or that every finding was fixed.
+
+See [QA verification](docs/QA_VERIFICATION.md) for measured results and V1 limits.
+
 ```bash
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-backend.txt

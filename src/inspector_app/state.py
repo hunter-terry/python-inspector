@@ -7,10 +7,17 @@ it never encodes flow rules itself.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
-from .models import ApprovalRequest, Finding, ReportDocument, RunResult, ScanResult, SourceKind
+from .models import (
+    ApprovalRequest,
+    Finding,
+    ReportDocument,
+    RunResult,
+    ScanResult,
+    SourceKind,
+)
 
 
 class Screen(Enum):
@@ -76,6 +83,13 @@ class AppState:
         self.screen = Screen.START
         self.source_kind = None
         self.source_label = None
+        self.scan_result = None
+        self.scan_phase = ScanPhase.IDLE
+        self.pending_approval = None
+        self.last_run_result = None
+        self.selected_finding_id = None
+        self.report = None
+        self.report_saved_to = None
 
     def begin_scan(self) -> None:
         if self.screen != Screen.PROJECT_REVIEW or self.source_label is None:
@@ -86,6 +100,11 @@ class AppState:
         self.scan_progress_fraction = 0.0
         self.scan_failure_reason = None
         self.scan_result = None
+        self.pending_approval = None
+        self.last_run_result = None
+        self.selected_finding_id = None
+        self.report = None
+        self.report_saved_to = None
 
     # -- Scanning ------------------------------------------------------------
     def report_progress(self, label: str, fraction: float) -> None:

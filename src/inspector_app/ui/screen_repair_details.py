@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
+from ..models import REPAIR_REVIEW_GUIDANCE
 from . import theme
 
 
@@ -19,7 +20,8 @@ class RepairDetailsScreen(ctk.CTkFrame):
             header, text="< Back to results", fg_color="transparent", border_width=2, width=160,
             command=self.controller.back_to_results,
         ).pack(side="left")
-        ctk.CTkButton(header, text="Copy for repair", width=150, command=self._copy_to_clipboard).pack(
+        self.copy_button = ctk.CTkButton(header, text="Copy for repair", width=150, command=self._copy_to_clipboard)
+        self.copy_button.pack(
             side="right"
         )
 
@@ -36,6 +38,7 @@ class RepairDetailsScreen(ctk.CTkFrame):
         finding = self.controller.state.selected_finding
         if finding is None:
             return
+        self.copy_button.configure(text="Copy for repair")
         self.title_label.configure(text=f"{finding.finding_id} — {finding.category}")
         location_text = (
             f"{finding.file_path or 'n/a'}:{finding.line_number or '?'}  "
@@ -44,13 +47,18 @@ class RepairDetailsScreen(ctk.CTkFrame):
         self.location_label.configure(text=location_text)
 
         body_lines = [
+            "Finding:", "  " + finding.summary, "",
+            "What could happen:", "  " + finding.what_could_happen, "",
             "Evidence:", "  " + finding.evidence, "",
             "Suggested repair:", "  " + finding.suggested_repair, "",
             "Verification steps:",
         ]
         for i, step in enumerate(finding.verification_steps, start=1):
             body_lines.append(f"  {i}. {step}")
-        body_lines += ["", f"Scanner: {finding.scanner_name} {finding.scanner_version}"]
+        body_lines += ["", f"Scanner: {finding.scanner_name} {finding.scanner_version}", "",
+                       "Repair review instructions:",
+                       *REPAIR_REVIEW_GUIDANCE,
+                       self.controller.state.scan_result.GUARANTEE_DISCLAIMER]
 
         header_lines = [f"{finding.finding_id} — {finding.category}", location_text, ""]
         self._clipboard_text = "\n".join(header_lines + body_lines)
@@ -63,3 +71,4 @@ class RepairDetailsScreen(ctk.CTkFrame):
     def _copy_to_clipboard(self) -> None:
         self.clipboard_clear()
         self.clipboard_append(self._clipboard_text)
+        self.copy_button.configure(text="Copied")
