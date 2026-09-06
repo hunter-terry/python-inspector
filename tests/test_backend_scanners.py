@@ -82,6 +82,16 @@ def test_repo_config_checker_clean_project_has_no_findings():
     assert findings == ()
 
 
+def test_repo_config_checker_env_file_reported_once_not_twice(tmp_path):
+    """A literal `.env` file matches both '*.env' and '.env' in
+    _SENSITIVE_FILENAME_PATTERNS -- found live on a real project (Hunter's
+    own Second Brain vault) reporting each real .env file twice."""
+    (tmp_path / ".env").write_text("SECRET=xyz\n", encoding="utf-8")
+    _, findings = scanners.run_repo_config_checker(tmp_path)
+    env_findings = [f for f in findings if f.file_path == ".env"]
+    assert len(env_findings) == 1, f"expected exactly 1 finding for a literal .env file, got {len(env_findings)}"
+
+
 def test_all_scanners_produce_unique_finding_ids():
     seen: set[str] = set()
     for fn in scanners.ALL_SCANNERS:

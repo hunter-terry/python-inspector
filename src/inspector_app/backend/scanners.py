@@ -400,7 +400,7 @@ def run_detect_secrets(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Findi
 
 # ------------------------------------------------------ repo config check --
 
-_SENSITIVE_FILENAME_PATTERNS = ("*.env", ".env", "*.pem", "*.key", "id_rsa", "id_dsa", "*.pfx", "*.p12")
+_SENSITIVE_FILENAME_PATTERNS = ("*.env", "*.pem", "*.key", "id_rsa", "id_dsa", "*.pfx", "*.p12")
 _DEBUG_TRUE_RE = re.compile(r"^\s*DEBUG\s*=\s*True\b")
 
 
@@ -409,9 +409,13 @@ def run_repo_config_checker(project_dir: Path) -> tuple[ScannerRunRecord, tuple[
 
     all_files = [p for p in project_dir.rglob("*") if p.is_file() and not is_ignored(p, project_dir)]
 
+    # A single file can match more than one glob (e.g. a literal ".env" also
+    # matches "*.env"); report each real file once, not once per pattern.
+    seen_sensitive_files: set[Path] = set()
     for pattern in _SENSITIVE_FILENAME_PATTERNS:
         for match in project_dir.rglob(pattern):
-            if match.is_file() and not is_ignored(match, project_dir):
+            if match.is_file() and not is_ignored(match, project_dir) and match not in seen_sensitive_files:
+                seen_sensitive_files.add(match)
                 relpath = _relpath(project_dir, str(match))
                 findings.append(
                     Finding(
