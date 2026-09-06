@@ -12,6 +12,10 @@ SEVERITY_COLORS = {
     "Info": "#7f8c8d",
 }
 
+# Colors for save report status
+SUCCESS_COLOR = "#27ae60"
+ERROR_COLOR = "#c0392b"
+
 FONT_TITLE = ("Segoe UI", 22, "bold")
 FONT_SUBTITLE = ("Segoe UI", 14)
 FONT_SECTION = ("Segoe UI", 16, "bold")

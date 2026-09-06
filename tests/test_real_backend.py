@@ -146,7 +146,7 @@ def test_run_approved_check_never_modifies_the_original_project(backend, monkeyp
     monkeypatch.setattr(sandbox, "check_isolation_available", lambda: (True, ""))
     monkeypatch.setattr(sandbox, "ensure_runner_image", lambda: (True, ""))
 
-    def fake_run(workspace, command, timeout=120):
+    def fake_run(workspace, command, timeout=120, is_cancelled=None):
         # simulate a test run that writes a stray file into the *disposable copy*
         (workspace / "side_effect.txt").write_text("ran", encoding="utf-8")
         return sandbox.ContainerRunOutcome(exit_code=0, stdout="1 passed", stderr="", timed_out=False)

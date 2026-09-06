@@ -25,9 +25,11 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from .subprocess_utils import run_tool
 
@@ -90,6 +92,7 @@ def run_in_isolated_container(
     command: list[str],
     *,
     timeout: float = DEFAULT_RUN_TIMEOUT,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> ContainerRunOutcome:
     """Run `command` inside a disposable, network-disabled container.
 
@@ -110,6 +113,9 @@ def run_in_isolated_container(
         "--cpus", CPU_LIMIT,
         "--pids-limit", PIDS_LIMIT,
         "--security-opt", "no-new-privileges",
+        "--cap-drop", "ALL",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,size=64m",
         "-v", f"{workspace}:/workspace:rw",
         "-w", "/workspace",
         RUNNER_IMAGE,
@@ -127,8 +133,40 @@ def run_in_isolated_container(
     except (FileNotFoundError, OSError) as exc:
         return ContainerRunOutcome(None, "", "", False, launch_failed=True, launch_error=str(exc))
 
+    # If cancellation checking is not requested, use the original simple approach
+    if is_cancelled is None:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return ContainerRunOutcome(process.returncode, stdout, stderr, timed_out=False)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["docker", "kill", container_name], capture_output=True, timeout=15, shell=False, check=False)
+            try:
+                stdout, stderr = process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = "", ""
+            return ContainerRunOutcome(None, stdout, stderr, timed_out=True)
+
+    # Polling loop mirroring the pattern in github_source.clone_repository
+    start_time = time.monotonic()
+    while process.poll() is None:
+        # Check for cancellation first
+        if is_cancelled and is_cancelled():
+            subprocess.run(["docker", "kill", container_name], capture_output=True, timeout=15, shell=False, check=False)
+            try:
+                stdout, stderr = process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = "", ""
+            return ContainerRunOutcome(None, stdout, stderr, timed_out=True)  # Reuse timed_out for cancellation
+        
+        # Check timeout
+        if time.monotonic() - start_time >= timeout:
+            break  # Will go to timeout handling below
+        
+        time.sleep(0.2)
+    
+    # Normal completion or timeout expired
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
+        stdout, stderr = process.communicate(timeout=max(0, timeout - (time.monotonic() - start_time)))
         return ContainerRunOutcome(process.returncode, stdout, stderr, timed_out=False)
     except subprocess.TimeoutExpired:
         subprocess.run(["docker", "kill", container_name], capture_output=True, timeout=15, shell=False, check=False)

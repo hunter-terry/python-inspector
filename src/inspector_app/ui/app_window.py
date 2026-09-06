@@ -248,7 +248,7 @@ class AppController:
         def worker() -> None:
             started = time.monotonic()
             try:
-                result = self.backend.run_approved_check(request)
+                result = self.backend.run_approved_check(request, is_cancelled=self._cancel_flag.is_set)
             except Exception as exc:  # noqa: BLE001 -- never strand approval on a crashed worker
                 result = RunResult(request.request_id, ApprovalDecision.APPROVED, None, "",
                                    f"Runtime check failed: {exc}", time.monotonic() - started)
@@ -349,7 +349,7 @@ class AppController:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(content)
         except OSError as exc:
-            self.screens[Screen.SAVE_REPORT].status_label.configure(text=f"Could not save report: {exc}")
+            self.screens[Screen.SAVE_REPORT].set_status(f"Could not save report: {exc}", is_error=True)
             return
         self.state.report_saved(path)
         self.render()

@@ -18,6 +18,7 @@ from ..contract import CancelledCheck, ProgressCallback
 from ..models import (
     ApprovalDecision,
     ApprovalRequest,
+    CheckOutcome,
     Finding,
     FindingStatus,
     ReportDocument,
@@ -85,7 +86,12 @@ class RealBackend:
             if is_cancelled():
                 return tuple(records), tuple(findings), True
             on_progress(f"Running {scanner_fn.__name__.removeprefix('run_')}...", (index - 1) / total)
-            record, scanner_findings = scanner_fn(project_dir)
+            try:
+                record, scanner_findings = scanner_fn(project_dir)
+            except Exception as exc:
+                # If a scanner raises an unexpected exception, record it as FAILED and continue
+                record = ScannerRunRecord(scanner_fn.__name__.removeprefix('run_'), "unknown", CheckOutcome.FAILED, str(exc))
+                scanner_findings = ()
             records.append(record)
             findings.extend(scanner_findings)
             on_progress(f"Finished {scanner_fn.__name__.removeprefix('run_')}", index / total)
@@ -264,7 +270,7 @@ class RealBackend:
             ),
         )
 
-    def run_approved_check(self, request: ApprovalRequest) -> RunResult:
+    def run_approved_check(self, request: ApprovalRequest, is_cancelled: CancelledCheck | None = None) -> RunResult:
         started = datetime.now(timezone.utc)
         meta = self._pending_requests.get(request.request_id)
 
@@ -314,7 +320,7 @@ class RealBackend:
                 disposable_copy,
                 ignore=shutil.ignore_patterns(".git", ".venv", "venv", "__pycache__", "*.pyc"),
             )
-            outcome = sandbox.run_in_isolated_container(disposable_copy, ["pytest", "-q"])
+            outcome = sandbox.run_in_isolated_container(disposable_copy, ["pytest", "-q"], is_cancelled=is_cancelled)
         finally:
             safe_rmtree(disposable_copy)
 

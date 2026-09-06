@@ -170,7 +170,7 @@ def run_bandit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, ...]
         line_number = item.get("line_number")
         finding_id = stable_finding_id("BANDIT", test_id, file_path, str(line_number))
 
-        is_secret_value = test_id in SECRET_VALUE_BANDIT_TEST_IDS
+        is_secret_value = test_id in SECRET_VALUE_BANDIT_TEST_IDS or (item.get("issue_cwe") or {}).get("id") == 798
         if is_secret_value:
             category = "Security: Secrets"
             summary = "A hardcoded credential-like value was found in source code."

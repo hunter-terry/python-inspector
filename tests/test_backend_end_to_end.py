@@ -90,7 +90,7 @@ def test_full_flow_with_mocked_isolated_runtime_check(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, "ensure_runner_image", lambda: (True, ""))
     monkeypatch.setattr(
         sandbox, "run_in_isolated_container",
-        lambda workspace, command, timeout=120: sandbox.ContainerRunOutcome(
+        lambda workspace, command, timeout=120, is_cancelled=None: sandbox.ContainerRunOutcome(
             exit_code=0, stdout="1 passed in 0.01s", stderr="", timed_out=False,
         ),
     )

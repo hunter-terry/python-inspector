@@ -26,12 +26,16 @@ class SaveReportScreen(ctk.CTkFrame):
             self, text="Preview — nothing is saved until you press Save report", font=theme.FONT_SUBTITLE
         ).pack(anchor="w", padx=30)
 
-        self.status_label = ctk.CTkLabel(self, text="", font=theme.FONT_BODY, text_color="#27ae60")
+        self.status_label = ctk.CTkLabel(self, text="", font=theme.FONT_BODY, text_color=theme.SUCCESS_COLOR)
         self.status_label.pack(anchor="w", padx=30, pady=(2, 8))
 
         self.text = ctk.CTkTextbox(self, font=theme.FONT_MONO, wrap="word")
         self.text.pack(fill="both", expand=True, padx=30, pady=(0, 24))
         self.text.configure(state="disabled")
+
+    def set_status(self, text: str, is_error: bool = False) -> None:
+        """Set the status label text and color based on success/error state."""
+        self.status_label.configure(text=text, text_color=theme.ERROR_COLOR if is_error else theme.SUCCESS_COLOR)
 
     def refresh(self) -> None:
         state = self.controller.state
@@ -45,6 +49,6 @@ class SaveReportScreen(ctk.CTkFrame):
         self.text.configure(state="disabled")
 
         if state.report_saved_to:
-            self.status_label.configure(text=f"Saved to {state.report_saved_to}")
+            self.set_status(f"Saved to {state.report_saved_to}")
         else:
-            self.status_label.configure(text="Not saved yet.")
+            self.set_status("Not saved yet.")
