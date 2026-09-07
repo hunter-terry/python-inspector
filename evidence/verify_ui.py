@@ -208,6 +208,26 @@ def test_real_native_save_dialog(app, tmp_path, count):
     print(f"Native Save dialog wrote {destination.stat().st_size} bytes for {count} findings")
 
 
+def test_minimize_restore_forces_repaint(app):
+    load(app, 20)
+    app.root.attributes("-alpha", 1.0)
+    app.root.iconify()
+    pump(app.root, 0.2)
+    app.root.deiconify()
+    pump(app.root, 0.2)
+    # The <Map> handler schedules the alpha nudge 30ms out; pumping past that
+    # window must observe it actually fire and then settle back to opaque,
+    # not just that the window is visible again.
+    deadline = time.monotonic() + 1.0
+    saw_nudge = False
+    while time.monotonic() < deadline:
+        if app.root.attributes("-alpha") != 1.0:
+            saw_nudge = True
+        pump(app.root, 0.02)
+    assert saw_nudge, "restoring from minimized never triggered the repaint nudge"
+    assert app.root.attributes("-alpha") == 1.0, "window was left partially transparent"
+
+
 def test_repeated_native_folder_selection(app, tmp_path):
     from native_dialog_probe import inspect
     for _ in range(5):

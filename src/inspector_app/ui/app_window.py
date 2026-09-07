@@ -59,7 +59,21 @@ class AppController:
         }
         self._visible_frame = None
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.bind("<Map>", self._on_window_mapped)
         self.render()
+
+    def _on_window_mapped(self, _event) -> None:
+        # On Windows, restoring this window from minimized sometimes leaves
+        # already-drawn widgets showing stale pixels until something forces a
+        # repaint (seen on the Results screen, but not limited to it). An
+        # alpha nudge forces DWM to recompose the whole window without
+        # touching size or maximized/normal state the way a geometry change
+        # would.
+        self.root.after(30, self._force_repaint)
+
+    def _force_repaint(self) -> None:
+        self.root.attributes("-alpha", 0.999)
+        self.root.after(1, lambda: self.root.attributes("-alpha", 1.0))
 
     # -- rendering ---------------------------------------------------------
     def render(self) -> None:
