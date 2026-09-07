@@ -7,6 +7,7 @@ docs/INTERFACE_CONTRACT.md and contract.py for the Protocol this satisfies.
 from __future__ import annotations
 
 import atexit
+import time
 import dataclasses
 import shutil
 import tempfile
@@ -50,7 +51,24 @@ class RealBackend:
 
     # -- cleanup -------------------------------------------------------------
     def _cleanup_workspace_root(self) -> None:
-        safe_rmtree(self._workspace_root)
+        if not self._workspace_root.exists():
+            return
+        # Try up to 3 times to remove the workspace root
+        for i in range(3):
+            try:
+                safe_rmtree(self._workspace_root)
+                # Check if it's gone
+                if not self._workspace_root.exists():
+                    return
+            except Exception:
+                pass  # We'll try again
+            # Wait a bit before retrying
+            time.sleep(0.1 * (2 ** i))  # 0.1, 0.2, 0.4 seconds
+        # If we still haven't removed it, try one more time without waiting
+        try:
+            safe_rmtree(self._workspace_root)
+        except Exception:
+            pass
 
     def end_session(self) -> None:
         """Release reviewed source when leaving Results or closing the app."""
