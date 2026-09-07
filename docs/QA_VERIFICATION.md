@@ -53,6 +53,20 @@ SHA-256 snapshots of every fixture file were identical before and after.
 A live public `octocat/Hello-World` scan removed its clone and parent when
 Scan something else ended the session.
 
+## Full pytest coverage
+
+From the project root, run this single command to execute both the default
+tests and the GUI regression tests:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests evidence\verify_ui.py -q
+```
+
+The bare default command, `.venv\Scripts\python.exe -m pytest -q`, runs only
+`tests/` because `pyproject.toml` sets `testpaths = ["tests"]`. It does not
+include `evidence/verify_ui.py`, so a passing bare default command alone is not
+a full-suite result.
+
 Commands run from the project root:
 
 ```powershell
