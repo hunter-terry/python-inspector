@@ -71,6 +71,43 @@ def test_detect_secrets_finds_the_fake_private_key():
         assert "FAKEFAKEFAKE" not in f.evidence
 
 
+def test_detect_secrets_excludes_pytest_cache_directory(tmp_path):
+    """Found live: every real-world scan flagged `.pytest_cache/CACHEDIR.TAG`'s
+    hex signature as a possible secret -- reproduced here with the exact real
+    file content, not a synthetic stand-in."""
+    cache_dir = tmp_path / ".pytest_cache"
+    cache_dir.mkdir()
+    (cache_dir / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55\n"
+        "# This file is a cache directory tag created by pytest.\n",
+        encoding="utf-8",
+    )
+    _, findings = scanners.run_detect_secrets(tmp_path)
+    assert findings == ()
+
+
+def test_detect_secrets_recognizes_json_decodable_base64_payload(tmp_path):
+    """Found live in a real stress-test harness's own logs: a base64-encoded
+    JSON event payload has enough entropy to trip the Base64 High Entropy
+    String plugin, but it is not a secret -- it cleanly JSON-decodes."""
+    import base64
+    import json as json_module
+
+    payload = json_module.dumps({"event": "heartbeat", "seq": 42, "ok": True, "trace_id": "abc123def456"})
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    (tmp_path / "orchestration_log.py").write_text(f'PAYLOAD = "{encoded}"\n', encoding="utf-8")
+    _, findings = scanners.run_detect_secrets(tmp_path)
+    assert findings == ()
+
+
+def test_detect_secrets_still_finds_the_hardcoded_aws_key_alongside_base64_plugin():
+    """The false-positive fix must not weaken real detection: the vulnerable
+    fixture's AWS key also trips the Base64 High Entropy String plugin (real
+    secrets are high-entropy too), and it must still be reported."""
+    _, findings = scanners.run_detect_secrets(VULNERABLE)
+    assert any("AWS Access Key" in f.summary for f in findings)
+
+
 def test_repo_config_checker_flags_sensitive_filename():
     record, findings = scanners.run_repo_config_checker(VULNERABLE)
     assert record.outcome == CheckOutcome.RAN

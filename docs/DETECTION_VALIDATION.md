@@ -79,17 +79,66 @@ otherwise, unlike Confirmed findings from the other three tools.
 
 ## Candidate next steps (not authorized or scheduled — for Hunter to prioritize)
 
-1. Reduce the secrets scanner's false-positive rate: exclude `.pytest_cache`
-   (and similar tool-cache directories) by default, and consider recognizing
-   the shape of base64-encoded non-secret payloads (e.g. JSON-decodes
-   cleanly) before flagging them.
+1. ~~Reduce the secrets scanner's false-positive rate~~ — **done 2026-09-08**,
+   see [Update](#update-2026-09-08--secrets-false-positive-fix) below.
 2. Add `pyproject.toml` / Poetry / Pipenv lockfile support to `pip-audit`
    coverage. V1 only reads `requirements.txt`-style files; `_V2Relay_Prototype`
    got zero dependency-vulnerability coverage as a direct result, silently
    in the sense that nothing crashed, but not silently in the sense that the
    report always states plainly that no requirements.txt is being audited.
-3. Nothing found in this pass is urgent or blocking. This is a backlog for
+3. Deduplicate same-line secret findings: a single hardcoded secret routinely
+   trips more than one `detect-secrets` plugin at once (e.g. the vulnerable
+   fixture's AWS key is reported separately as `AWS Access Key`,
+   `Base64 High Entropy String`, and `Secret Keyword` — confirmed live during
+   the 2026-09-08 false-positive fix above). Collapsing same
+   file+line+hashed-secret hits into one finding that lists which detectors
+   agreed would cut noise further and could raise confidence when multiple
+   detectors agree on the same spot. Explicitly flagged by Hunter as a good
+   idea for later, not for now — raised mid-mission during the fix above, not
+   yet scoped or authorized as its own mission.
+4. Nothing found in this pass is urgent or blocking. This is a backlog for
    whenever Python Inspector work is next prioritized, not a call to act now.
+
+## Update 2026-09-08 — secrets false-positive fix
+
+Candidate next step 1 above is done, under a Claude Code Work Inbox
+maintenance mission (`Workstream: Maintenance`), done directly rather than
+dispatched to the fleet given the small, precision-sensitive scope. Changes
+confined to `src/inspector_app/backend/scanners.py` (`run_detect_secrets`)
+and `tests/test_backend_scanners.py`, no other file touched:
+
+- `detect-secrets` is now invoked with `--exclude-files` built from the same
+  `IGNORED_DIR_NAMES` list every other scanner already treats as
+  not-the-project's-own-code (`.pytest_cache`, `.venv`, `.git`,
+  `node_modules`, etc.) — it previously scanned into those directories
+  because `--all-files` deliberately ignores `.gitignore`.
+- A `Base64 High Entropy String` hit is now checked against the actual
+  source line it was found on: if a base64 token on that line decodes to
+  valid UTF-8 text that itself parses as JSON, it is recognized as a
+  non-secret payload (e.g. a logged orchestration/event message) and not
+  reported. Real secrets are random bytes or opaque tokens, not JSON
+  structures, so this does not risk hiding a genuine credential — verified
+  directly: the vulnerable fixture's hardcoded AWS key also trips the
+  Base64 High Entropy plugin and is still reported after this change.
+
+**Verification against a live re-scan of `_V2Relay_Prototype`** (the
+richest source of the original 27 false positives): secrets findings
+dropped from 25 to 15 — all 4 `.pytest_cache` hits and 6 of 7
+`Base64 High Entropy String` hits (JSON-decodable stress-harness payloads)
+are gone. The 1 remaining Base64 hit, the `AWS Access Key` hit, and the
+`Secret Keyword` hit are all inside `tests/test_redact.py` — the project's
+own deliberate fixture for its redaction function, correctly still caught.
+The 12 remaining `Hex High Entropy String` hits are in
+`stress_test/.runtime/lanes/local/*.json` — that project's own generated
+runtime state, not a generic tool-cache directory, so out of scope for a
+general-purpose fix in Python-Inspector (left as-is, correctly).
+
+Full suite: 98 passed, 1 skipped (same pre-existing Docker-daemon skip),
+including 3 new regression tests
+(`test_detect_secrets_excludes_pytest_cache_directory`,
+`test_detect_secrets_recognizes_json_decodable_base64_payload`,
+`test_detect_secrets_still_finds_the_hardcoded_aws_key_alongside_base64_plugin`).
+Commands and full evidence are on the linked Work Inbox result row.
 
 ## Commands run
 

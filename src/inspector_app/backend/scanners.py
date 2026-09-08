@@ -12,6 +12,8 @@ that reaches the caller, and never a silently-dropped check.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import tempfile
@@ -26,7 +28,7 @@ from ..models import (
     Severity,
 )
 from .findings_util import SECRET_VALUE_BANDIT_TEST_IDS, stable_finding_id
-from .fs_util import is_ignored
+from .fs_util import IGNORED_DIR_NAMES, is_ignored
 from .subprocess_utils import module_invocation, run_tool
 
 
@@ -342,6 +344,65 @@ def _find_line_number(requirements_text: str, package_name: str) -> int | None:
 
 # --------------------------------------------------------- detect-secrets --
 
+# Matches a path with a known tool-cache/dependency directory as one of its
+# components (reusing the same directory list every other scanner already
+# treats as not-the-project's-own-code), so detect-secrets never has to walk
+# into .venv, .pytest_cache, node_modules, etc. --all-files intentionally
+# ignores .gitignore (to catch secrets in files that would otherwise never be
+# reviewed), which is exactly why these tool-owned directories need their own
+# explicit exclusion instead of relying on git-ignore behavior.
+_SECRETS_EXCLUDE_DIRS_PATTERN = (
+    r"(^|[\\/])(" + "|".join(re.escape(name) for name in sorted(IGNORED_DIR_NAMES)) + r")([\\/]|$)"
+)
+
+# A run of base64 alphabet characters long enough to plausibly be a payload
+# rather than an incidental short token.
+_BASE64_TOKEN_RE = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _decodes_to_json(token: str) -> bool:
+    """True if `token` is base64 for bytes that themselves are valid JSON.
+
+    Used only to recognize the shape of a non-secret base64-encoded payload
+    (e.g. a logged orchestration/event message) -- real secrets are random
+    bytes or opaque tokens, not JSON structures, so this does not risk
+    hiding an actual credential.
+    """
+    core = token.rstrip("=")
+    if len(core) < 16:
+        return False
+    padded = core + "=" * (-len(core) % 4)
+    try:
+        decoded = base64.b64decode(padded, validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    try:
+        text = decoded.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return False
+    if not text:
+        return False
+    try:
+        json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return True
+
+
+def _flags_non_secret_base64_payload(project_dir: Path, file_path: str, line_number: int | None) -> bool:
+    if line_number is None:
+        return False
+    try:
+        text = (project_dir / file_path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    lines = text.splitlines()
+    if not (1 <= line_number <= len(lines)):
+        return False
+    line = lines[line_number - 1]
+    return any(_decodes_to_json(token) for token in _BASE64_TOKEN_RE.findall(line))
+
+
 def run_detect_secrets(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, ...]]:
     version_probe = run_tool(module_invocation("detect_secrets", "--version"), timeout=15)
     if version_probe.launch_failed:
@@ -355,7 +416,11 @@ def run_detect_secrets(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Findi
     # the project directory -- an absolute Windows path silently yields zero
     # results. --all-files scans the working tree regardless of git tracking.
     result = run_tool(
-        module_invocation("detect_secrets", "scan", "--all-files", "."),
+        module_invocation(
+            "detect_secrets", "scan", "--all-files",
+            "--exclude-files", _SECRETS_EXCLUDE_DIRS_PATTERN,
+            ".",
+        ),
         cwd=project_dir,
         timeout=90,
     )
@@ -372,6 +437,8 @@ def run_detect_secrets(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Findi
         for hit in hits:
             secret_type = hit.get("type", "Secret")
             line_number = hit.get("line_number")
+            if secret_type == "Base64 High Entropy String" and _flags_non_secret_base64_payload(project_dir, file_path, line_number):
+                continue
             hashed = hit.get("hashed_secret", "")
             finding_id = stable_finding_id("SECRETS", file_path, str(line_number), secret_type, hashed)
             findings.append(
