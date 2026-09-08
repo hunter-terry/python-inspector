@@ -183,6 +183,29 @@ fixtures, 1 covering the zero-pinned-dependencies case, and 3 unit tests for
 the new pin-extraction helpers. Commands and full evidence are on the linked
 Work Inbox result row.
 
+### Independent review fix-up 2026-09-08 — PEP 508 extras marker in `dependencies` array
+
+An independent second-look mission (separate Work Inbox result row, linked
+from the one above) found that `_extract_pep621_pins`'s original array
+boundary detection (`re.search(r"dependencies\s*=\s*\[(.*?)\]", ..., re.DOTALL)`)
+stopped at the *first* `]` in the array text. A dependency entry using a PEP
+508 extras marker — e.g. `"requests[security]==2.25.0"`, `"uvicorn[standard]==0.30.0"`
+— embeds its own `[`/`]` pair inside the quoted string, so that inner `]` was
+mistaken for the end of the whole array. Effect: every pin in that array was
+silently dropped, not just the one with extras, degrading safely to
+`Unavailable` (never a false "audited, no findings") but losing real coverage
+for a very common real-world `pyproject.toml` shape.
+
+Fixed with a small bracket-depth scanner (`_extract_bracketed_array_text`)
+that tracks nesting depth and ignores brackets inside double-quoted strings,
+replacing the single non-greedy regex. The extras-marked entry itself is
+still not extracted as a pin (matching the existing narrow, pinned-only
+regex scope — extras aren't a version pin), but sibling entries in the same
+array are no longer lost. One new regression test added
+(`test_extract_pep621_pins_survives_a_pep508_extras_marker`). Full suite:
+105 passed, 1 skipped. Verified through the frozen `verify-repair.ps1`
+contract (mission id `pep621-extras-review-20260908`, attempt 1/3, PASS).
+
 ## Commands run
 
 ```powershell

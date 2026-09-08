@@ -301,13 +301,43 @@ def _extract_toml_table_text(text: str, table_name: str) -> str:
     return "\n".join(lines)
 
 
+def _extract_bracketed_array_text(text: str, search_start: int) -> str | None:
+    """The text strictly between a `[` at/after `search_start` and its
+    matching `]`, tracking bracket depth and ignoring brackets inside a
+    double-quoted string. A naive non-greedy `\\[(.*?)\\]` regex stops at the
+    *first* `]`, which is wrong once an entry uses a PEP 508 extras marker
+    like `"requests[security]==2.25.0"` -- that inner `]` would otherwise be
+    mistaken for the end of the whole array, silently dropping every pin in
+    it, not just the one with extras."""
+    open_index = text.find("[", search_start)
+    if open_index == -1:
+        return None
+    depth = 0
+    in_string = False
+    for i in range(open_index, len(text)):
+        char = text[i]
+        if char == '"' and text[i - 1] != "\\":
+            in_string = not in_string
+        elif not in_string:
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[open_index + 1 : i]
+    return None
+
+
 def _extract_pep621_pins(text: str) -> list[tuple[str, str]]:
     """Exact pins from a PEP 621 `[project] dependencies = [...]` array."""
     project_text = _extract_toml_table_text(text, "project")
-    match = re.search(r"dependencies\s*=\s*\[(.*?)\]", project_text, re.DOTALL)
-    if not match:
+    key_match = re.search(r"dependencies\s*=\s*", project_text)
+    if not key_match:
         return []
-    return _PEP621_PIN_RE.findall(match.group(1))
+    array_text = _extract_bracketed_array_text(project_text, key_match.end())
+    if array_text is None:
+        return []
+    return _PEP621_PIN_RE.findall(array_text)
 
 
 def _extract_pyproject_pins(text: str) -> list[tuple[str, str]]:

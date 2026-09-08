@@ -106,6 +106,21 @@ def test_extract_pep621_pins_reads_exact_pins_only():
     assert scanners._extract_pep621_pins(text) == [("requests", "2.25.0")]
 
 
+def test_extract_pep621_pins_survives_a_pep508_extras_marker():
+    """A dependency entry with an extras marker (e.g. requests[security])
+    embeds its own `[`/`]` pair inside the quoted string. A naive
+    non-greedy bracket match stops at that inner `]` and would silently
+    lose every pin in the array, not just the one with extras."""
+    text = (
+        "[project]\n"
+        "dependencies = [\n"
+        '    "requests[security]==2.25.0",\n'
+        '    "flask==2.0.1",\n'
+        "]\n"
+    )
+    assert scanners._extract_pep621_pins(text) == [("flask", "2.0.1")]
+
+
 def test_extract_toml_table_pins_skips_ranges_and_python_key():
     text = (
         "[packages]\n"
