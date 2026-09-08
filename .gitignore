@@ -6,3 +6,6 @@ evidence/*
 !evidence/measure_results.py
 !evidence/native_dialog_probe.py
 !evidence/verify_ui.py
+!evidence/qc-kit-*.md
+!evidence/v2relay-*.md
+!evidence/ocs-*.md
