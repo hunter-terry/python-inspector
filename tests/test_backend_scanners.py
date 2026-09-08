@@ -17,6 +17,8 @@ from inspector_app.models import CheckOutcome
 FIXTURES = Path(__file__).parent / "fixtures"
 VULNERABLE = FIXTURES / "vulnerable_project"
 CLEAN = FIXTURES / "clean_project"
+POETRY_PROJECT = FIXTURES / "poetry_project"
+PIPENV_PROJECT = FIXTURES / "pipenv_project"
 
 
 def test_ruff_finds_undefined_names_and_unused_import():
@@ -61,6 +63,68 @@ def test_pip_audit_unavailable_without_requirements_file():
     record, findings = scanners.run_pip_audit(CLEAN)
     assert record.outcome == CheckOutcome.UNAVAILABLE
     assert findings == ()
+
+
+def test_pip_audit_finds_known_vulnerable_pin_in_poetry_pyproject_toml():
+    """poetry_project has no requirements.txt at all -- only a pyproject.toml
+    declaring urllib3 via Poetry's [tool.poetry.dependencies] table. This is
+    the exact shape that returned "Unavailable" before this fix."""
+    record, findings = scanners.run_pip_audit(POETRY_PROJECT)
+    assert record.outcome == CheckOutcome.RAN
+    assert any(f.category == "Dependency vulnerability" for f in findings)
+    assert all(f.file_path == "pyproject.toml" for f in findings)
+
+
+def test_pip_audit_finds_known_vulnerable_pin_in_pipfile_lock():
+    """pipenv_project has no requirements.txt or pyproject.toml -- only a
+    Pipfile/Pipfile.lock pair declaring urllib3 via Pipenv."""
+    record, findings = scanners.run_pip_audit(PIPENV_PROJECT)
+    assert record.outcome == CheckOutcome.RAN
+    assert any(f.category == "Dependency vulnerability" for f in findings)
+    assert all(f.file_path == "Pipfile.lock" for f in findings)
+
+
+def test_pip_audit_unavailable_when_pyproject_has_no_pinned_dependencies(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "no-pins"\nversion = "0.1.0"\ndependencies = ["requests>=2.0"]\n',
+        encoding="utf-8",
+    )
+    record, findings = scanners.run_pip_audit(tmp_path)
+    assert record.outcome == CheckOutcome.UNAVAILABLE
+    assert findings == ()
+
+
+def test_extract_pep621_pins_reads_exact_pins_only():
+    text = (
+        "[project]\n"
+        "dependencies = [\n"
+        '    "requests==2.25.0",\n'
+        '    "urllib3>=1.0",\n'
+        '    "flask~=2.0",\n'
+        "]\n"
+    )
+    assert scanners._extract_pep621_pins(text) == [("requests", "2.25.0")]
+
+
+def test_extract_toml_table_pins_skips_ranges_and_python_key():
+    text = (
+        "[packages]\n"
+        'python = "3.10"\n'
+        'urllib3 = "==1.24.1"\n'
+        'requests = "*"\n'
+        'flask = {version = "^2.0"}\n'
+    )
+    assert scanners._extract_toml_table_pins(text, "packages") == [("urllib3", "1.24.1")]
+
+
+def test_extract_pipfile_lock_pins_skips_unpinned_entries():
+    payload = {
+        "default": {
+            "urllib3": {"version": "==1.24.1"},
+            "requests": {"version": "*"},
+        }
+    }
+    assert scanners._extract_pipfile_lock_pins(payload) == [("urllib3", "1.24.1")]
 
 
 def test_detect_secrets_finds_the_fake_private_key():

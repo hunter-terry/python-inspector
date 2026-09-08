@@ -81,11 +81,9 @@ otherwise, unlike Confirmed findings from the other three tools.
 
 1. ~~Reduce the secrets scanner's false-positive rate~~ — **done 2026-09-08**,
    see [Update](#update-2026-09-08--secrets-false-positive-fix) below.
-2. Add `pyproject.toml` / Poetry / Pipenv lockfile support to `pip-audit`
-   coverage. V1 only reads `requirements.txt`-style files; `_V2Relay_Prototype`
-   got zero dependency-vulnerability coverage as a direct result, silently
-   in the sense that nothing crashed, but not silently in the sense that the
-   report always states plainly that no requirements.txt is being audited.
+2. ~~Add `pyproject.toml` / Poetry / Pipenv lockfile support to `pip-audit`
+   coverage~~ — **done 2026-09-08**, see
+   [Update](#update-2026-09-08--pip-audit-poetrypipenv-coverage) below.
 3. Deduplicate same-line secret findings: a single hardcoded secret routinely
    trips more than one `detect-secrets` plugin at once (e.g. the vulnerable
    fixture's AWS key is reported separately as `AWS Access Key`,
@@ -139,6 +137,51 @@ including 3 new regression tests
 `test_detect_secrets_recognizes_json_decodable_base64_payload`,
 `test_detect_secrets_still_finds_the_hardcoded_aws_key_alongside_base64_plugin`).
 Commands and full evidence are on the linked Work Inbox result row.
+
+## Update 2026-09-08 — pip-audit Poetry/Pipenv coverage
+
+Candidate next step 2 above is done, under its own Claude Code Work Inbox
+maintenance mission (`Workstream: Maintenance`), done directly rather than
+dispatched to the fleet given the small, precision-sensitive parsing involved.
+Changes confined to `src/inspector_app/backend/scanners.py` (`run_pip_audit`
+and its helpers), `tests/test_backend_scanners.py`, two new fixture projects
+under `tests/fixtures/` (`poetry_project`, `pipenv_project`), and this file —
+no other file touched.
+
+`run_pip_audit` now falls back, when no `requirements.txt`-family file
+exists, to reading exactly-pinned dependencies from whichever of these is
+present, in order: `pyproject.toml` (Poetry's `[tool.poetry.dependencies]`
+table, or PEP 621's `[project] dependencies = [...]` array), `Pipfile.lock`
+(Pipenv's resolved lock, `default` section), or a bare `Pipfile`
+(`[packages]` table) if no lock has been generated yet. The pinned
+`name==version` pairs found are written to a synthetic requirements-format
+temp file and audited through the exact same `pip-audit -r` invocation
+already used for `requirements.txt` — no new dependency-resolution mechanism,
+no new third-party dependency (only the standard library's `re` and `json`,
+already imported). A version range (`^`, `~`, `*`, `>=`, an inline table)
+is deliberately left unaudited rather than guessed at, matching V1's existing
+pinned-only scope; a manifest found with zero exact pins reports
+`Unavailable` with an explicit reason rather than a silently-empty `RAN`.
+
+**Verification against a live re-scan of `_V2Relay_Prototype`**: still
+reports `Unavailable`, correctly — direct inspection during this mission
+found the real project has no `requirements.txt`, `pyproject.toml`, or
+`Pipfile`/`Pipfile.lock` at all, of any kind. The original candidate-next-step
+wording assumed it was a Poetry/Pipenv project; it is neither. This fix closes
+the general format gap for any real Poetry- or Pipenv-declared project, but
+cannot manufacture dependency coverage for a project that declares no
+dependencies through any file `pip-audit` (or this app) can read. Verified
+instead against two new fixtures built to match the gap's shape
+(`tests/fixtures/poetry_project/pyproject.toml` and
+`tests/fixtures/pipenv_project/Pipfile.lock`, each pinning the same known-CVE
+`urllib3==1.24.1` already used by `vulnerable_project`) — both now return
+real `Dependency vulnerability` findings that were previously `Unavailable`.
+
+Full suite: 104 passed, 1 skipped (same pre-existing Docker-daemon skip),
+including 6 new tests: 2 end-to-end known-answer tests against the new
+fixtures, 1 covering the zero-pinned-dependencies case, and 3 unit tests for
+the new pin-extraction helpers. Commands and full evidence are on the linked
+Work Inbox result row.
 
 ## Commands run
 

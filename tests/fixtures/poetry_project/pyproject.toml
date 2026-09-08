@@ -1,0 +1,12 @@
+[tool.poetry]
+name = "poetry-fixture-project"
+version = "0.1.0"
+description = "Fixture project declaring dependencies via Poetry's [tool.poetry.dependencies] table -- no requirements.txt exists here on purpose."
+
+[tool.poetry.dependencies]
+python = "^3.10"
+urllib3 = "1.24.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

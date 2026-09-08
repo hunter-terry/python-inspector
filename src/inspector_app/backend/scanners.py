@@ -29,7 +29,7 @@ from ..models import (
 )
 from .findings_util import SECRET_VALUE_BANDIT_TEST_IDS, stable_finding_id
 from .fs_util import IGNORED_DIR_NAMES, is_ignored
-from .subprocess_utils import module_invocation, run_tool
+from .subprocess_utils import ToolResult, module_invocation, run_tool
 
 
 def _relpath(project_dir: Path, absolute: str) -> str:
@@ -249,6 +249,114 @@ def _bandit_repair(test_id: str) -> str:
 
 _REQUIREMENTS_FILENAMES = ("requirements.txt", "requirements-prod.txt", "requirements-main.txt")
 
+# Matches an exact `name = "version"` pin in a TOML key/value table -- the
+# shape shared by Poetry's `[tool.poetry.dependencies]` and Pipenv's
+# `Pipfile` `[packages]` table. A caret, tilde, wildcard, or comparison
+# operator marks a *range*, not a pin, so those are deliberately left
+# unmatched rather than guessed at (pip-audit needs a concrete version to
+# audit, and V1 never invents one).
+_TOML_EXACT_PIN_RE = re.compile(r'^([A-Za-z0-9][A-Za-z0-9._-]*)\s*=\s*"(?:==)?([0-9][A-Za-z0-9.+-]*)"\s*$')
+
+# Matches an exact `"name==version"` PEP 508 pin inside a PEP 621
+# `dependencies = [...]` array. Anything without a literal `==` (a range,
+# an extras marker, a URL requirement) is left unmatched for the same reason
+# as above.
+_PEP621_PIN_RE = re.compile(r'"([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][A-Za-z0-9.+-]*)"')
+
+
+def _extract_toml_table_pins(text: str, table_suffix: str) -> list[tuple[str, str]]:
+    """Exact pins from the TOML table whose header ends with `table_suffix`
+    (e.g. "poetry.dependencies" for `[tool.poetry.dependencies]`, or
+    "packages" for a Pipfile's `[packages]`). The `python` key is not a
+    dependency and is always skipped."""
+    pins: list[tuple[str, str]] = []
+    in_table = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            header = stripped.strip("[]")
+            in_table = header == table_suffix or header.endswith(f".{table_suffix}")
+            continue
+        if not in_table:
+            continue
+        match = _TOML_EXACT_PIN_RE.match(stripped)
+        if match and match.group(1).lower() != "python":
+            pins.append((match.group(1), match.group(2)))
+    return pins
+
+
+def _extract_toml_table_text(text: str, table_name: str) -> str:
+    """The raw lines belonging to the top-level TOML table with this exact
+    name (e.g. "project"), stopping at the next `[...]` header -- including a
+    `[project.optional-dependencies]` sub-table, which is not the same table."""
+    lines: list[str] = []
+    in_table = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and not stripped.startswith("[["):
+            in_table = stripped.strip("[]") == table_name
+            continue
+        if in_table:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _extract_pep621_pins(text: str) -> list[tuple[str, str]]:
+    """Exact pins from a PEP 621 `[project] dependencies = [...]` array."""
+    project_text = _extract_toml_table_text(text, "project")
+    match = re.search(r"dependencies\s*=\s*\[(.*?)\]", project_text, re.DOTALL)
+    if not match:
+        return []
+    return _PEP621_PIN_RE.findall(match.group(1))
+
+
+def _extract_pyproject_pins(text: str) -> list[tuple[str, str]]:
+    """Exact pins declared either the Poetry way (`[tool.poetry.dependencies]`)
+    or the PEP 621 way (`[project] dependencies = [...]`) -- a pyproject.toml
+    can use either, so both are checked."""
+    return _extract_toml_table_pins(text, "poetry.dependencies") + _extract_pep621_pins(text)
+
+
+def _extract_pipfile_lock_pins(payload: dict) -> list[tuple[str, str]]:
+    """Exact pins from a Pipfile.lock's `default` section. `develop` (dev-only
+    dependencies) is intentionally not audited here, matching V1's existing
+    scope of auditing what the application itself depends on to run."""
+    pins: list[tuple[str, str]] = []
+    for name, info in (payload.get("default") or {}).items():
+        version = (info or {}).get("version", "")
+        if version.startswith("=="):
+            pins.append((name, version[2:]))
+    return pins
+
+
+def _find_pinned_dependency_manifest(project_dir: Path) -> tuple[Path, str, list[tuple[str, str]]] | None:
+    """The first supported dependency manifest found beyond requirements.txt,
+    together with its raw text (for evidence/line-number lookups) and its
+    exactly-pinned (name, version) pairs. Checked in the order a real project
+    is most likely to declare one: pyproject.toml (Poetry or PEP 621), then
+    Pipfile.lock (the resolved, authoritative Pipenv source), then a bare
+    Pipfile if no lock has been generated yet."""
+    pyproject_path = project_dir / "pyproject.toml"
+    if pyproject_path.is_file():
+        text = pyproject_path.read_text(encoding="utf-8", errors="replace")
+        return (pyproject_path, text, _extract_pyproject_pins(text))
+
+    pipfile_lock_path = project_dir / "Pipfile.lock"
+    if pipfile_lock_path.is_file():
+        text = pipfile_lock_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return (pipfile_lock_path, text, [])
+        return (pipfile_lock_path, text, _extract_pipfile_lock_pins(payload))
+
+    pipfile_path = project_dir / "Pipfile"
+    if pipfile_path.is_file():
+        text = pipfile_path.read_text(encoding="utf-8", errors="replace")
+        return (pipfile_path, text, _extract_toml_table_pins(text, "packages"))
+
+    return None
+
 
 def run_pip_audit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, ...]]:
     version_probe = run_tool(module_invocation("pip_audit", "--version"), timeout=15)
@@ -263,20 +371,50 @@ def run_pip_audit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, .
         (project_dir / name for name in _REQUIREMENTS_FILENAMES if (project_dir / name).is_file()),
         None,
     )
-    if requirements_file is None:
+    if requirements_file is not None:
+        result = run_tool(
+            module_invocation("pip_audit", "-f", "json", "-r", str(requirements_file), "--progress-spinner", "off"),
+            timeout=90,
+        )
+        return _pip_audit_outcome(result, version, project_dir, requirements_file, requirements_file.read_text(encoding="utf-8", errors="replace"))
+
+    manifest = _find_pinned_dependency_manifest(project_dir)
+    if manifest is None:
         return (
             ScannerRunRecord(
                 "pip-audit", version, CheckOutcome.UNAVAILABLE,
-                "No requirements.txt found. V1 audits pinned dependencies from a requirements.txt "
-                "file only; pyproject.toml/poetry/pipenv lockfiles are not yet supported.",
+                "No requirements.txt, pyproject.toml (Poetry or PEP 621), or Pipfile/Pipfile.lock found.",
+            ),
+            (),
+        )
+    manifest_path, manifest_text, pins = manifest
+    if not pins:
+        return (
+            ScannerRunRecord(
+                "pip-audit", version, CheckOutcome.UNAVAILABLE,
+                f"{_relpath(project_dir, str(manifest_path))} was found but declares no exactly-pinned "
+                "dependencies; V1 audits pinned versions only and does not resolve version ranges.",
             ),
             (),
         )
 
-    result = run_tool(
-        module_invocation("pip_audit", "-f", "json", "-r", str(requirements_file), "--progress-spinner", "off"),
-        timeout=90,
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
+        for name, pinned_version in pins:
+            tmp.write(f"{name}=={pinned_version}\n")
+        tmp_path = Path(tmp.name)
+    try:
+        result = run_tool(
+            module_invocation("pip_audit", "-f", "json", "-r", str(tmp_path), "--progress-spinner", "off"),
+            timeout=90,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return _pip_audit_outcome(result, version, project_dir, manifest_path, manifest_text)
+
+
+def _pip_audit_outcome(
+    result: ToolResult, version: str, project_dir: Path, source_path: Path, source_text: str
+) -> tuple[ScannerRunRecord, tuple[Finding, ...]]:
     if result.timed_out:
         return (ScannerRunRecord("pip-audit", version, CheckOutcome.FAILED, "pip-audit timed out (network may be unavailable)."), ())
     try:
@@ -285,15 +423,14 @@ def run_pip_audit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, .
         detail = (result.stderr or "could not parse pip-audit output; the vulnerability database may be unreachable").strip()[:500]
         return (ScannerRunRecord("pip-audit", version, CheckOutcome.FAILED, detail), ())
 
-    req_text = requirements_file.read_text(encoding="utf-8", errors="replace")
-    req_relpath = _relpath(project_dir, str(requirements_file))
+    source_relpath = _relpath(project_dir, str(source_path))
 
     findings: list[Finding] = []
     seen_vulns: set[tuple[str, str, str]] = set()
     for dependency in payload.get("dependencies", []):
         name = dependency.get("name", "")
         version_pinned = dependency.get("version", "")
-        line_number = _find_line_number(req_text, name)
+        line_number = _find_line_number(source_text, name)
         for vuln in dependency.get("vulns", []):
             vuln_id = vuln.get("id", "unknown")
             # pip-audit's own advisory data occasionally lists the same
@@ -315,7 +452,7 @@ def run_pip_audit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, .
                     status=FindingStatus.CONFIRMED_FAILURE,
                     summary=f"{name} {version_pinned} has a publicly known security vulnerability ({aliases}).",
                     what_could_happen="An attacker could exploit the known flaw in this package version if it is reachable in this application.",
-                    file_path=req_relpath,
+                    file_path=source_relpath,
                     line_number=line_number,
                     evidence=f"{name}=={version_pinned} (advisory {vuln_id}, aliases: {aliases})",
                     suggested_repair=(
@@ -324,7 +461,7 @@ def run_pip_audit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, .
                         else f"No fixed version is published yet for {vuln_id}; consider an alternative package or mitigating controls."
                     ),
                     verification_steps=(
-                        "Update the pin in requirements.txt and reinstall dependencies in a fresh environment.",
+                        f"Update the pin in {source_relpath} and reinstall dependencies in a fresh environment.",
                         "Re-run the dependency scan and confirm the advisory is gone.",
                     ),
                     scanner_name="pip-audit",
@@ -335,7 +472,10 @@ def run_pip_audit(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Finding, .
 
 
 def _find_line_number(requirements_text: str, package_name: str) -> int | None:
-    pattern = re.compile(rf"^\s*{re.escape(package_name)}\s*[=<>!~]", re.IGNORECASE)
+    # The optional quotes make this match a plain requirements.txt line
+    # (`name==1.0`), a TOML key (`name = "1.0"`), and a JSON key
+    # (`"name": {...}`) with the same pattern.
+    pattern = re.compile(rf'^\s*"?{re.escape(package_name)}"?\s*[:=<>!~]', re.IGNORECASE)
     for i, line in enumerate(requirements_text.splitlines(), start=1):
         if pattern.match(line):
             return i
