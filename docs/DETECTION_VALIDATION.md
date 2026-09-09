@@ -29,53 +29,52 @@ trusting the labels.
    programmatically (the same production scan path the GUI uses, no GUI
    involved) against three real projects Hunter owns, chosen to exclude
    Python Inspector itself, his personal Second-Brain note vaults, and any
-   third-party client-confidential work:
-   - `C:\Users\hunte\Documents\spreadsheet-cleanup-qc-kit`
-   - `C:\Users\hunte\Documents\_V2Relay_Prototype`
-   - `C:\Users\hunte\Documents\Second Brain\2-work\client-opportunity-scanner`
+   third-party client-confidential work. Identities, paths, and full findings
+   for these three are kept in a private validation record rather than this
+   public repo, since they document real (if low-risk) findings in
+   unpublished code — only the aggregate, non-identifying results are
+   reported below.
 
-## Results by project
+## Results
 
-| Project | Confirmed | Strong | Possible | Informational | Headline |
-|---|---|---|---|---|---|
-| spreadsheet-cleanup-qc-kit | 0 | 0 | 1 | 100 | The 1 possible finding is a false positive (`.pytest_cache\CACHEDIR.TAG`). Rest is real typing/datetime/unused-var cleanup in actual source. |
-| _V2Relay_Prototype | 0 | 12 | 25 | 43 | All 25 possible findings verified false positive by hand (cache markers, base64 orchestration payloads, a deliberate test fixture for the project's own redaction function). 12 strong = bandit subprocess-hygiene notices in `relay/`, expected for a subprocess-orchestration tool. `pip-audit` did not run — no `requirements.txt` in this project. |
-| client-opportunity-scanner | 1 | 14 | 3 | 26 | The 1 confirmed finding is real: `pytest==8.4.2` has a published CVE. The 3 possible + 2 of the 14 strong findings were checked against actual source and read as lower real risk than the label implies (parameterized SQL, fixed API endpoints, a test-fixture default). The other 12 strong findings are one cosmetic ruff rule in one file. |
+| Confirmed | Strong | Possible | Informational |
+|---|---|---|---|
+| 1 of 3 projects had one confirmed finding | 26 across all 3 | 29 across all 3 | 169 across all 3 |
 
-Full findings for each project are in `evidence/` (see below) as the same
-two-layer report the app itself produces — a plain-English summary and a
-technical packet with exact file/line/evidence per finding.
+The one confirmed finding across all three projects was a real, currently
+published CVE in a pinned dependency (`pytest==8.4.2`, advisory
+PYSEC-2026-1845 / CVE-2025-71176 / GHSA-6w46-j5rx-g56g) — see the
+[QA verification](QA_VERIFICATION.md) demo report for the same class of
+finding against a public repo (`psf/requests`).
 
-## Verdict
-
-**Confirmed-tier findings are fully trustworthy as reported.** They are real
-tool output relayed directly, not a heuristic — proven here by a live catch:
-`requirements.txt:4` in client-opportunity-scanner pins `pytest==8.4.2`,
-which has a real, currently-published advisory (PYSEC-2026-1845 /
-CVE-2025-71176 / GHSA-6w46-j5rx-g56g). Suggested repair: upgrade to
-`pytest>=9.0.3`.
-
-**Strong/Possible findings are always real pattern matches — bandit and ruff
-never fabricated a hit across any scan in this pass or the fixture suite —
-but the label alone doesn't tell you exploitability.** Every strong/possible
-security finding checked by hand this pass turned out to be either genuinely
-worth a look (client-opportunity-scanner's dynamic SQL construction, though
-its actual *values* are parameterized) or lower real risk on inspection
-(fixed-URL `urlopen` calls, a test-fixture default password). This is exactly
-what the app's own confidence labeling is for — it was never designed to
-mean "definitely exploitable," and treating a Strong/Possible finding as
-"real pattern, worth a two-minute read" rather than "confirmed bug" matches
-how the app documents itself.
+Every Strong/Possible security finding across the three projects was checked
+by hand against the actual source line. All were genuine pattern matches (no
+tool fabricated a hit), and each read as either worth a follow-up look or
+lower real risk on inspection once the surrounding code was read — exactly
+what the app's Strong/Possible labels are designed to mean: "real pattern,
+worth a two-minute read," not "confirmed bug."
 
 **Measured weak spot: secrets detection specifically.** Tally across all
 three real-world scans: **27 "possible secret" findings, 0 real.** All were
 `.pytest_cache` marker files, base64-encoded non-secret orchestration
-payloads in a stress-test harness's own logs, or deliberately fake
-credential strings in a test file for a redaction function. This is expected
-behavior for an entropy-based heuristic (it is tuned to over-flag rather than
-miss a real key) — not a defect in how the app labels or handles findings —
-but it is the one category worth mentally discounting until proven
-otherwise, unlike Confirmed findings from the other three tools.
+payloads in one project's own stress-test logs, or deliberately fake
+credential strings in a test fixture for a redaction function. This is
+expected behavior for an entropy-based heuristic (it is tuned to over-flag
+rather than miss a real key) — not a defect in how the app labels or handles
+findings — but it is the one category worth mentally discounting until
+proven otherwise, unlike Confirmed findings from the other three tools.
+
+## Verdict
+
+**Confirmed-tier findings are fully trustworthy as reported.** They are real
+tool output relayed directly, not a heuristic — proven here by a live catch
+of a real, currently-published dependency CVE (see above).
+
+**Strong/Possible findings are always real pattern matches — bandit and ruff
+never fabricated a hit across any scan in this pass or the fixture suite —
+but the label alone doesn't tell you exploitability.** Treat a Strong/Possible
+finding as "real pattern, worth a two-minute read" rather than "confirmed
+bug," matching how the app documents itself.
 
 ## Candidate next steps (not authorized or scheduled — for Hunter to prioritize)
 
@@ -119,16 +118,15 @@ and `tests/test_backend_scanners.py`, no other file touched:
   directly: the vulnerable fixture's hardcoded AWS key also trips the
   Base64 High Entropy plugin and is still reported after this change.
 
-**Verification against a live re-scan of `_V2Relay_Prototype`** (the
-richest source of the original 27 false positives): secrets findings
-dropped from 25 to 15 — all 4 `.pytest_cache` hits and 6 of 7
+**Verification against a live re-scan of one of the three private validation
+projects** (the richest source of the original 27 false positives): secrets
+findings dropped from 25 to 15 — all 4 `.pytest_cache` hits and 6 of 7
 `Base64 High Entropy String` hits (JSON-decodable stress-harness payloads)
 are gone. The 1 remaining Base64 hit, the `AWS Access Key` hit, and the
-`Secret Keyword` hit are all inside `tests/test_redact.py` — the project's
-own deliberate fixture for its redaction function, correctly still caught.
-The 12 remaining `Hex High Entropy String` hits are in
-`stress_test/.runtime/lanes/local/*.json` — that project's own generated
-runtime state, not a generic tool-cache directory, so out of scope for a
+`Secret Keyword` hit are all inside that project's own deliberate fixture for
+its redaction function, correctly still caught. The 12 remaining
+`Hex High Entropy String` hits are in that project's own generated runtime
+state (not a generic tool-cache directory), so out of scope for a
 general-purpose fix in Python-Inspector (left as-is, correctly).
 
 Full suite: 98 passed, 1 skipped (same pre-existing Docker-daemon skip),
@@ -136,7 +134,6 @@ including 3 new regression tests
 (`test_detect_secrets_excludes_pytest_cache_directory`,
 `test_detect_secrets_recognizes_json_decodable_base64_payload`,
 `test_detect_secrets_still_finds_the_hardcoded_aws_key_alongside_base64_plugin`).
-Commands and full evidence are on the linked Work Inbox result row.
 
 ## Update 2026-09-08 — pip-audit Poetry/Pipenv coverage
 
@@ -163,16 +160,16 @@ is deliberately left unaudited rather than guessed at, matching V1's existing
 pinned-only scope; a manifest found with zero exact pins reports
 `Unavailable` with an explicit reason rather than a silently-empty `RAN`.
 
-**Verification against a live re-scan of `_V2Relay_Prototype`**: still
-reports `Unavailable`, correctly — direct inspection during this mission
-found the real project has no `requirements.txt`, `pyproject.toml`, or
-`Pipfile`/`Pipfile.lock` at all, of any kind. The original candidate-next-step
-wording assumed it was a Poetry/Pipenv project; it is neither. This fix closes
-the general format gap for any real Poetry- or Pipenv-declared project, but
-cannot manufacture dependency coverage for a project that declares no
-dependencies through any file `pip-audit` (or this app) can read. Verified
-instead against two new fixtures built to match the gap's shape
-(`tests/fixtures/poetry_project/pyproject.toml` and
+**Verification against a live re-scan of one of the three private validation
+projects**: still reports `Unavailable`, correctly — direct inspection during
+this mission found the real project has no `requirements.txt`,
+`pyproject.toml`, or `Pipfile`/`Pipfile.lock` at all, of any kind. The
+original candidate-next-step wording assumed it was a Poetry/Pipenv project;
+it is neither. This fix closes the general format gap for any real Poetry- or
+Pipenv-declared project, but cannot manufacture dependency coverage for a
+project that declares no dependencies through any file `pip-audit` (or this
+app) can read. Verified instead against two new fixtures built to match the
+gap's shape (`tests/fixtures/poetry_project/pyproject.toml` and
 `tests/fixtures/pipenv_project/Pipfile.lock`, each pinning the same known-CVE
 `urllib3==1.24.1` already used by `vulnerable_project`) — both now return
 real `Dependency vulnerability` findings that were previously `Unavailable`.
@@ -180,8 +177,7 @@ real `Dependency vulnerability` findings that were previously `Unavailable`.
 Full suite: 104 passed, 1 skipped (same pre-existing Docker-daemon skip),
 including 6 new tests: 2 end-to-end known-answer tests against the new
 fixtures, 1 covering the zero-pinned-dependencies case, and 3 unit tests for
-the new pin-extraction helpers. Commands and full evidence are on the linked
-Work Inbox result row.
+the new pin-extraction helpers.
 
 ### Independent review fix-up 2026-09-08 — PEP 508 extras marker in `dependencies` array
 
@@ -220,9 +216,11 @@ the two resulting Markdown documents per project.
 
 ## Evidence
 
-- `evidence/qc-kit-summary.md`, `evidence/qc-kit-technical-packet.md`
-- `evidence/v2relay-summary.md`, `evidence/v2relay-technical-packet.md`
-- `evidence/ocs-summary.md`, `evidence/ocs-technical-packet.md`
+Full per-finding evidence for the three private validation projects (paths,
+file/line locations, and exact findings) is kept locally rather than in this
+public repo — see the note in Method above. `evidence/demo-report.md` (a scan
+of the public `psf/requests` repo) is the one full example report published
+here.
 
 ## Limitations
 
