@@ -1,8 +1,8 @@
 # Python Inspector (V1)
 
-A normal Windows desktop app for Hunter that finds likely bugs and security
-vulnerabilities in a Python project and hands out a report — a plain-English
-summary plus a technical repair packet a person or an external AI can act on.
+A Windows desktop app that finds likely bugs and security vulnerabilities in
+a Python project and hands out a report — a plain-English summary plus a
+technical repair packet a person or an external AI can act on.
 
 **No AI, cloud model, or paid API runs inside this program.**
 
@@ -10,40 +10,43 @@ Part of Hunter Terry's [AI Orchestration & Verification Portfolio](https://githu
 
 ## Status
 
-Both the frontend work order (`Build V1 Python Inspector frontend and
-interaction design`) and the backend work order (`Implement V1 Python
-Inspector backend and safety controls`) are complete. `src/inspector_app/backend/`
+Both the frontend (interaction design and screens) and the backend (scanning
+and safety controls) are complete. `src/inspector_app/backend/`
 is the real, deterministic backend (`RealBackend`), wired into the app in
 place of the demo-only `mock_data.MockBackend`. See
 [docs/INTERFACE_CONTRACT.md](docs/INTERFACE_CONTRACT.md) for the contract it
-implements, and the backend work order's Notion page for full build evidence.
+implements, and [docs/QA_VERIFICATION.md](docs/QA_VERIFICATION.md) /
+[docs/DETECTION_VALIDATION.md](docs/DETECTION_VALIDATION.md) for full build
+and validation evidence.
 
 Real, read-only scanning uses four proven open-source tools — **ruff**
 (syntax/quality), **bandit** (security patterns), **pip-audit** (known
 vulnerable dependencies), **detect-secrets** (hardcoded secrets) — plus a
 small first-party repository/configuration checker. The one approval-gated
-runtime check (running a project's own `pytest` suite, only after Hunter
-presses **Approve and run**) executes inside a disposable, `--network none`
+runtime check (running a project's own `pytest` suite, only after you press
+**Approve and run**) executes inside a disposable, `--network none`
 Docker container; if real isolation cannot be proven on the machine, the
 check is refused rather than run unsafely.
 
 ## Product rules this build follows
 
 - The first scan is always read-only.
-- Nothing from the inspected project runs until Hunter presses **Approve
-  and run** on the exact command shown to him.
+- Nothing from the inspected project runs until you press **Approve
+  and run** on the exact command shown to you.
 - The app never modifies the inspected source project.
 - The app does not become a place that stores project files.
-- A report is written to disk only after Hunter presses **Save report**
-  and picks a destination.
+- A report is written to disk only after you press **Save report**
+  and pick a destination.
 - Results always distinguish confirmed failures from possible findings,
   and the app never claims to guarantee it found every bug or
   vulnerability.
 
 ## Running it
 
-For this installed copy, double-click **Start Python Inspector.cmd** in this
-folder. Choose a project, review the source, then scan. Results show ten
+After cloning this repo and installing dependencies (see the commands below),
+double-click **Start Python Inspector.cmd** in the project folder, or launch
+it from source with `python -m inspector_app.main` (see below). Choose a
+project, review the source, then scan. Results show ten
 findings per page; returning from details or report preview keeps your place.
 Use **Copy for repair** for one finding or **Save report** for the complete report.
 After an approved test run, **View last run output** reopens both stdout and stderr.
@@ -63,7 +66,7 @@ See [QA verification](docs/QA_VERIFICATION.md) for measured results and V1 limit
 ```bash
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-backend.txt
-.venv\Scripts\python -m pytest              # ~78 tests, no GUI required
+.venv\Scripts\python -m pytest              # no GUI required; see docs/DETECTION_VALIDATION.md for the current dated count
 cd src && ..\.venv\Scripts\python -m inspector_app.main   # launches the app
 ```
 

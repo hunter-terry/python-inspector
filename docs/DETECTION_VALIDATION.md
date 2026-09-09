@@ -83,16 +83,9 @@ bug," matching how the app documents itself.
 2. ~~Add `pyproject.toml` / Poetry / Pipenv lockfile support to `pip-audit`
    coverage~~ — **done 2026-09-08**, see
    [Update](#update-2026-09-08--pip-audit-poetrypipenv-coverage) below.
-3. Deduplicate same-line secret findings: a single hardcoded secret routinely
-   trips more than one `detect-secrets` plugin at once (e.g. the vulnerable
-   fixture's AWS key is reported separately as `AWS Access Key`,
-   `Base64 High Entropy String`, and `Secret Keyword` — confirmed live during
-   the 2026-09-08 false-positive fix above). Collapsing same
-   file+line+hashed-secret hits into one finding that lists which detectors
-   agreed would cut noise further and could raise confidence when multiple
-   detectors agree on the same spot. Explicitly flagged by Hunter as a good
-   idea for later, not for now — raised mid-mission during the fix above, not
-   yet scoped or authorized as its own mission.
+3. ~~Deduplicate same-line secret findings~~ — **done 2026-09-09**, see
+   [Update](#update-2026-09-09--secrets-dedup-fix-and-2-independently-found-app-bugs)
+   below.
 4. Nothing found in this pass is urgent or blocking. This is a backlog for
    whenever Python Inspector work is next prioritized, not a call to act now.
 
@@ -202,11 +195,79 @@ array are no longer lost. One new regression test added
 105 passed, 1 skipped. Verified through the frozen `verify-repair.ps1`
 contract (mission id `pep621-extras-review-20260908`, attempt 1/3, PASS).
 
+## Update 2026-09-09 — secrets dedup fix, and 2 independently-found app bugs
+
+Candidate next step 3 above (secrets dedup) is done. Separately, a re-verification
+pass triggered by an unrelated maintenance finding surfaced two real, previously
+unknown bugs in Python-Inspector itself — both fixed the same day. Distinguishing
+who did what: OpenCode (a free-tier AI coding agent) drafted the dedup fix; Claude
+Code found, root-caused, and fixed the other two, and independently re-verified
+all three before anything was committed; Hunter authorized the scoped fixes,
+tests, and pushes in chat.
+
+**Why this pass happened:** a separate maintenance mission on the shared
+verify-repair tooling (Hunter's own agent-fleet verification controller, not part
+of this repo) found that tool's acceptance checker had been silently treating any
+external-command check as "passed" regardless of its real exit code. That defect
+was live during several past missions against this repo, including the one that
+added `docs/QA_VERIFICATION.md`'s documented combined-test command
+(`codex-pytestscope-20260907`) — so its recorded "PASS" wasn't actually proven at
+the time. Re-verifying it for real, independent of that tool, is what surfaced
+the two bugs below. See the [AI-worker supervision case
+study](https://github.com/hunter-terry/ai-orchestration-portfolio/blob/master/02-fleet-supervision/case-study.md)
+for the full correction to that historical claim.
+
+- **Secrets dedup** (candidate step 3, drafted by OpenCode, cleaned up and
+  verified by Claude Code): `run_detect_secrets` created one `Finding` per
+  detector-type hit instead of one per unique secret, so the vulnerable
+  fixture's single hardcoded AWS key still showed up 3 times (`AWS Access Key`,
+  `Base64 High Entropy String`, `Secret Keyword`) even after the false-positive
+  fix above. Fixed by grouping hits on `(file_path, line_number, hashed_secret)`
+  and listing every detected type in one finding. Commit `4079e05`.
+- **`approve_and_run()` TypeError against the shipped demo backend** (found and
+  fixed by Claude Code, not part of any fleet dispatch): `AppController` always
+  calls `backend.run_approved_check(request, is_cancelled=...)`. `RealBackend`
+  accepted that parameter; the documented `InspectorBackend` contract and
+  `MockBackend` — the backend the app actually constructs by default — did not.
+  Every real "Approve and run" click against the demo backend raised a
+  `TypeError` inside the background worker thread, which was caught and turned
+  into a failure `RunResult` before a test could observe it, making a real
+  interface bug look like GUI-test flakiness. Root-caused by tracing the
+  worker's actual result payload directly (not by inspection alone). Fixed by
+  extending the contract and `MockBackend` to accept `is_cancelled` (matching
+  `RealBackend`'s existing signature) rather than removing it from the call
+  site, so real cancellation support for long-running checks was not dropped.
+  New regression test:
+  `test_run_approved_check_accepts_is_cancelled_like_the_real_caller` — confirmed
+  failing with the exact `TypeError` against the pre-fix signature, passing
+  after. Commit `f36a4af`.
+- **Flaky minimize/restore repaint regression test** (found and fixed by Claude
+  Code): `test_minimize_restore_forces_repaint` polled the window's alpha value
+  at ~20ms granularity to catch a repaint nudge that only holds a non-1.0 alpha
+  for ~1ms, an observation window narrow enough that pump()'s coarser polling
+  could step over it entirely — measured at roughly a 1-in-4 real failure rate
+  over repeated runs, with no change in app behavior. This was a test-timing
+  gap, not an app defect: the app's own repaint-nudge mechanism is unchanged.
+  Fixed by tracing the actual `_force_repaint` call directly instead of racing
+  a polling loop against a 1ms window; 10/10 clean runs after the fix. Commit
+  `f36a4af`.
+
+Full suite, 2026-09-09, commit `f36a4af`: **107 passed, 1 skipped, 174.16s**
+(`.venv\Scripts\python -m pytest -q`). Combined suite (adds
+`evidence/verify_ui.py`, the separate GUI regression file `pyproject.toml`
+excludes from the bare command above): **120 passed, 1 skipped, 1 failed,
+238.33s** (`.venv\Scripts\python -m pytest tests evidence\verify_ui.py -q -rs`).
+The 1 skip and the 1 failure are the same root cause reported twice by two
+different tests: Docker Desktop's daemon could not be started in this
+environment during this pass — an environment gap, not a code regression. No
+other failures were observed in either suite.
+
 ## Commands run
 
 ```powershell
-.venv\Scripts\python -m pytest -q            # 95 passed, 1 skipped, 165.01s
+.venv\Scripts\python -m pytest -q            # 107 passed, 1 skipped, 174.16s (2026-09-09, commit f36a4af)
 .venv\Scripts\python -m pytest -q -rs        # skip reason: tests\test_backend_sandbox.py:132, Docker daemon not reachable
+.venv\Scripts\python -m pytest tests evidence\verify_ui.py -q -rs   # combined suite: 120 passed, 1 skipped, 1 failed, 238.33s (2026-09-09, commit f36a4af)
 ```
 
 The three real-world scans were run via a throwaway script (not committed —
