@@ -71,6 +71,25 @@ def test_build_approval_request_and_run_are_gated_by_caller():
     assert run_result.decision is ApprovalDecision.APPROVED
 
 
+def test_run_approved_check_accepts_is_cancelled_like_the_real_caller():
+    """AppController.approve_and_run() always calls
+    backend.run_approved_check(request, is_cancelled=self._cancel_flag.is_set) --
+    it does not know or care whether the backend is real or mocked. A backend
+    that only accepts `request` breaks that call with a TypeError the instant
+    Hunter presses Approve and run in the demo app. Call it exactly the way
+    the real frontend does."""
+    backend = MockBackend(step_seconds=0)
+    scan_result = backend.scan_local_project(
+        "C:/projects/demo", on_progress=lambda l, f: None, is_cancelled=lambda: False
+    )
+    finding_id = scan_result.findings[0].finding_id
+    request = backend.build_approval_request(scan_result, finding_id)
+
+    run_result = backend.run_approved_check(request, is_cancelled=lambda: False)
+    assert run_result.request_id == request.request_id
+    assert run_result.decision is ApprovalDecision.APPROVED
+
+
 def test_render_report_includes_disclaimer_and_findings():
     backend = MockBackend(step_seconds=0)
     scan_result = backend.scan_local_project(

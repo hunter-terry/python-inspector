@@ -142,7 +142,7 @@ def test_clipboard_readback(app):
 def test_async_run_output_and_worker_failure(app, crash):
     load(app, 1)
     calls = []
-    def run(request):
+    def run(request, is_cancelled=None):
         calls.append(request.request_id)
         time.sleep(0.2)
         if crash:
@@ -208,23 +208,28 @@ def test_real_native_save_dialog(app, tmp_path, count):
     print(f"Native Save dialog wrote {destination.stat().st_size} bytes for {count} findings")
 
 
-def test_minimize_restore_forces_repaint(app):
+def test_minimize_restore_forces_repaint(app, monkeypatch):
     load(app, 20)
     app.root.attributes("-alpha", 1.0)
+    # The nudge only holds alpha != 1.0 for ~1ms (the app.after(1, ...) below),
+    # which pump()'s 20ms-granularity polling can step over entirely without
+    # ever observing it -- that's a test-timing gap, not proof the nudge didn't
+    # fire. Trace the actual call instead of racing pump() against a 1ms window.
+    force_repaint_calls = []
+    original_force_repaint = app._force_repaint
+
+    def traced_force_repaint():
+        force_repaint_calls.append(time.monotonic())
+        return original_force_repaint()
+
+    monkeypatch.setattr(app, "_force_repaint", traced_force_repaint)
     app.root.iconify()
     pump(app.root, 0.2)
     app.root.deiconify()
-    pump(app.root, 0.2)
-    # The <Map> handler schedules the alpha nudge 30ms out; pumping past that
-    # window must observe it actually fire and then settle back to opaque,
-    # not just that the window is visible again.
-    deadline = time.monotonic() + 1.0
-    saw_nudge = False
-    while time.monotonic() < deadline:
-        if app.root.attributes("-alpha") != 1.0:
-            saw_nudge = True
-        pump(app.root, 0.02)
-    assert saw_nudge, "restoring from minimized never triggered the repaint nudge"
+    # The <Map> handler schedules the nudge 30ms out; 0.5s is a wide margin
+    # over that, not a tuned/arbitrary sleep -- it just needs to exceed 30ms.
+    pump(app.root, 0.5)
+    assert force_repaint_calls, "restoring from minimized never triggered the repaint nudge"
     assert app.root.attributes("-alpha") == 1.0, "window was left partially transparent"
 
 

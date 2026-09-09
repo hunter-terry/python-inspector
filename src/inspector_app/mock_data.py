@@ -213,7 +213,7 @@ class MockBackend:
             possible_risk="If the project's test suite has side effects, those effects stay inside the disposable copy only.",
         )
 
-    def run_approved_check(self, request: ApprovalRequest) -> RunResult:
+    def run_approved_check(self, request: ApprovalRequest, is_cancelled: CancelledCheck | None = None) -> RunResult:
         time.sleep(0.6)
         return RunResult(
             request_id=request.request_id,

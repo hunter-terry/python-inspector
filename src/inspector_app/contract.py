@@ -48,8 +48,14 @@ class InspectorBackend(Protocol):
         """Produce the exact command/test to show Hunter, not yet run."""
         ...
 
-    def run_approved_check(self, request: ApprovalRequest) -> RunResult:
-        """Only called after Hunter presses Approve and run."""
+    def run_approved_check(self, request: ApprovalRequest, is_cancelled: CancelledCheck | None = None) -> RunResult:
+        """Only called after Hunter presses Approve and run.
+
+        `is_cancelled` is optional so a backend without a real cancellable
+        subprocess (e.g. a demo/mock stand-in) can ignore it, but every
+        implementation must accept the parameter -- the frontend always
+        passes it.
+        """
         ...
 
     def render_report(self, scan_result: ScanResult) -> ReportDocument:
