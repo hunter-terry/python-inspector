@@ -84,7 +84,7 @@ bug," matching how the app documents itself.
    coverage~~ — **done 2026-09-08**, see
    [Update](#update-2026-09-08--pip-audit-poetrypipenv-coverage) below.
 3. ~~Deduplicate same-line secret findings~~ — **done 2026-09-09**, see
-   [Update](#update-2026-09-09--secrets-dedup-fix-and-2-independently-found-app-bugs)
+   [Update](#update-2026-09-09--secrets-dedup-fix-plus-1-app-bug-and-1-flaky-test-found-and-fixed)
    below.
 4. Nothing found in this pass is urgent or blocking. This is a backlog for
    whenever Python Inspector work is next prioritized, not a call to act now.
@@ -195,11 +195,12 @@ array are no longer lost. One new regression test added
 105 passed, 1 skipped. Verified through the frozen `verify-repair.ps1`
 contract (mission id `pep621-extras-review-20260908`, attempt 1/3, PASS).
 
-## Update 2026-09-09 — secrets dedup fix, and 2 independently-found app bugs
+## Update 2026-09-09 — secrets dedup fix, plus 1 app bug and 1 flaky test found and fixed
 
 Candidate next step 3 above (secrets dedup) is done. Separately, a re-verification
-pass triggered by an unrelated maintenance finding surfaced two real, previously
-unknown bugs in Python-Inspector itself — both fixed the same day. Distinguishing
+pass triggered by an unrelated maintenance finding surfaced one real, previously
+unknown app bug and one flaky (but not app-defective) regression test in
+Python-Inspector itself — both fixed the same day. Distinguishing
 who did what: OpenCode (a free-tier AI coding agent) drafted the dedup fix; Claude
 Code found, root-caused, and fixed the other two, and independently re-verified
 all three before anything was committed; Hunter authorized the scoped fixes,
@@ -213,7 +214,7 @@ was live during several past missions against this repo, including the one that
 added `docs/QA_VERIFICATION.md`'s documented combined-test command
 (`codex-pytestscope-20260907`) — so its recorded "PASS" wasn't actually proven at
 the time. Re-verifying it for real, independent of that tool, is what surfaced
-the two bugs below. See the [AI-worker supervision case
+the app bug and the flaky test below. See the [AI-worker supervision case
 study](https://github.com/hunter-terry/ai-orchestration-portfolio/blob/master/02-fleet-supervision/case-study.md)
 for the full correction to that historical claim.
 
