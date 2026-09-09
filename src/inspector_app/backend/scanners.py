@@ -603,6 +603,8 @@ def run_detect_secrets(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Findi
         return (ScannerRunRecord("detect-secrets", version, CheckOutcome.FAILED, detail), ())
 
     findings: list[Finding] = []
+    # Deduplicate by (file_path, line_number, hashed_secret)
+    dedup: dict[tuple[str, int | None, str], set[str]] = {}
     for file_path, hits in payload.get("results", {}).items():
         for hit in hits:
             secret_type = hit.get("type", "Secret")
@@ -610,28 +612,36 @@ def run_detect_secrets(project_dir: Path) -> tuple[ScannerRunRecord, tuple[Findi
             if secret_type == "Base64 High Entropy String" and _flags_non_secret_base64_payload(project_dir, file_path, line_number):
                 continue
             hashed = hit.get("hashed_secret", "")
-            finding_id = stable_finding_id("SECRETS", file_path, str(line_number), secret_type, hashed)
-            findings.append(
-                Finding(
-                    finding_id=finding_id,
-                    category="Security: Secrets",
-                    severity=Severity.HIGH,
-                    confidence=Confidence.MEDIUM,
-                    status=FindingStatus.POSSIBLE_FINDING,
-                    summary=f"A string that looks like a {secret_type} was found in a source file.",
-                    what_could_happen="If this is a real, active secret, anyone with the source code could use it.",
-                    file_path=file_path,
-                    line_number=line_number,
-                    evidence=f"Detected by pattern '{secret_type}' (value not disclosed; stored only as a one-way hash: {hashed[:12]}...).",
-                    suggested_repair="Confirm with the project owner whether this is a real, live secret; if so, remove it from source, rotate it, and load it from an environment variable or secret manager instead.",
-                    verification_steps=(
-                        "Confirm whether the value is/was live and rotate it if so.",
-                        "Re-run the secret scan and confirm no literal secret remains in source.",
-                    ),
-                    scanner_name="detect-secrets",
-                    scanner_version=version,
-                )
+            key = (file_path, line_number, hashed)
+            dedup.setdefault(key, set()).add(secret_type)
+
+    for (file_path, line_number, hashed), types in dedup.items():
+        finding_id = stable_finding_id("SECRETS", file_path, str(line_number), hashed)
+        types_sorted = sorted(types)
+        types_str = ", ".join(types_sorted)
+        summary = f"A string that looks like one of the following secret types: {types_str} was found in a source file."
+        evidence = f"Detected by patterns: {types_str} (value not disclosed; stored only as a one-way hash: {hashed[:12]}...)."
+        findings.append(
+            Finding(
+                finding_id=finding_id,
+                category="Security: Secrets",
+                severity=Severity.HIGH,
+                confidence=Confidence.MEDIUM,
+                status=FindingStatus.POSSIBLE_FINDING,
+                summary=summary,
+                what_could_happen="If this is a real, active secret, anyone with the source code could use it.",
+                file_path=file_path,
+                line_number=line_number,
+                evidence=evidence,
+                suggested_repair="Confirm with the project owner whether this is a real, live secret; if so, remove it from source, rotate it, and load it from an environment variable or secret manager instead.",
+                verification_steps=(
+                    "Confirm whether the value is/was live and rotate it if so.",
+                    "Re-run the secret scan and confirm no literal secret remains in source.",
+                ),
+                scanner_name="detect-secrets",
+                scanner_version=version,
             )
+        )
     return (ScannerRunRecord("detect-secrets", version, CheckOutcome.RAN), tuple(findings))
 
 

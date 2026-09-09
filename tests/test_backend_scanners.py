@@ -187,6 +187,17 @@ def test_detect_secrets_still_finds_the_hardcoded_aws_key_alongside_base64_plugi
     assert any("AWS Access Key" in f.summary for f in findings)
 
 
+def test_detect_secrets_deduplicates_same_secret():
+    """When detect-secrets reports multiple hits for the same secret (same file, line, hashed_secret),
+    only one Finding should be returned."""
+    record, findings = scanners.run_detect_secrets(VULNERABLE)
+    assert record.outcome == CheckOutcome.RAN
+    # Filter findings for the hardcoded AWS key in bad.py line 13
+    bad13 = [f for f in findings if f.file_path == "bad.py" and f.line_number == 13]
+    # There should be exactly one finding for this secret
+    assert len(bad13) == 1, f"Expected 1 finding for bad.py:13, got {len(bad13)}: {[f.summary for f in bad13]}"
+
+
 def test_repo_config_checker_flags_sensitive_filename():
     record, findings = scanners.run_repo_config_checker(VULNERABLE)
     assert record.outcome == CheckOutcome.RAN
