@@ -6,6 +6,8 @@ summary plus a technical repair packet a person or an external AI can act on.
 
 **No AI, cloud model, or paid API runs inside this program.**
 
+Part of Hunter Terry's [AI Orchestration & Verification Portfolio](https://github.com/hunter-terry/ai-orchestration-portfolio/blob/master/03-python-inspector/case-study.md) · [GitHub profile](https://github.com/hunter-terry)
+
 ## Status
 
 Both the frontend work order (`Build V1 Python Inspector frontend and
