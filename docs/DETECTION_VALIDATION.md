@@ -253,22 +253,25 @@ for the full correction to that historical claim.
   a polling loop against a 1ms window; 10/10 clean runs after the fix. Commit
   `f36a4af`.
 
-Full suite, 2026-09-09, commit `f36a4af`: **107 passed, 1 skipped, 174.16s**
+Full suite, 2026-09-09, commit `7335eef`: **108 passed, 0 skipped, 186.14s**
 (`.venv\Scripts\python -m pytest -q`). Combined suite (adds
 `evidence/verify_ui.py`, the separate GUI regression file `pyproject.toml`
-excludes from the bare command above): **120 passed, 1 skipped, 1 failed,
-238.33s** (`.venv\Scripts\python -m pytest tests evidence\verify_ui.py -q -rs`).
-The 1 skip and the 1 failure are the same root cause reported twice by two
-different tests: Docker Desktop's daemon could not be started in this
-environment during this pass — an environment gap, not a code regression. No
-other failures were observed in either suite.
+excludes from the bare command above): **122 passed, 0 skipped, 0 failed,
+247.00s** (`.venv\Scripts\python -m pytest tests evidence\verify_ui.py -q -rs`).
+Docker Desktop was running and reachable for this pass; the two tests
+previously blocked by an unavailable Docker daemon in this environment —
+`tests/test_backend_sandbox.py::test_live_isolated_run_executes_pytest_with_network_disabled`
+(previously skipped) and
+`evidence/verify_ui.py::test_real_scan_large_report_clipboard_and_docker_output`
+(previously failed) — were independently re-run by name and both confirmed
+passing (`2 passed in 128.64s`). No skips or failures of any kind in either
+suite; the earlier Docker-unavailable environment gap is closed.
 
 ## Commands run
 
 ```powershell
-.venv\Scripts\python -m pytest -q            # 107 passed, 1 skipped, 174.16s (2026-09-09, commit f36a4af)
-.venv\Scripts\python -m pytest -q -rs        # skip reason: tests\test_backend_sandbox.py:132, Docker daemon not reachable
-.venv\Scripts\python -m pytest tests evidence\verify_ui.py -q -rs   # combined suite: 120 passed, 1 skipped, 1 failed, 238.33s (2026-09-09, commit f36a4af)
+.venv\Scripts\python -m pytest -q            # 108 passed, 0 skipped, 186.14s (2026-09-09, commit 7335eef)
+.venv\Scripts\python -m pytest tests evidence\verify_ui.py -q -rs   # combined suite: 122 passed, 0 skipped, 0 failed, 247.00s (2026-09-09, commit 7335eef)
 ```
 
 The three real-world scans were run via a throwaway script (not committed —
